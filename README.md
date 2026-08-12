@@ -1,5 +1,7 @@
 # regression.nvim
 
+[![Tests](https://github.com/cctong/regression.nvim/actions/workflows/test.yaml/badge.svg)](https://github.com/cctong/regression.nvim/actions/workflows/test.yaml)
+
 `regression.nvim` answers a practical question:
 
 > My Neovim worked before the last update. What changed, and which plugin is
