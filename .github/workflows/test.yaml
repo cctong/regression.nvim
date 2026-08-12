@@ -1,0 +1,46 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Neovim ${{ matrix.neovim }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            neovim: v0.10.0
+          - os: ubuntu-latest
+            neovim: stable
+          - os: ubuntu-latest
+            neovim: nightly
+          - os: macos-latest
+            neovim: stable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      - name: Show Neovim version
+        run: nvim --version
+
+      - name: Run tests
+        run: make test
