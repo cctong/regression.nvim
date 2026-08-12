@@ -138,10 +138,14 @@ slowly.
 
 ## Architecture
 
-```text
-commands -> collector -> snapshot store
-                    \-> comparison -> report
-adapter  <------------------------ bisect probes
+```mermaid
+flowchart LR
+  baseline[":NvimBaseline"] --> saved[("Known-good JSON")]
+  regression[":NvimRegression"] --> compare["Compare current state"]
+  saved --> compare --> report["Regression report"]
+
+  bisect[":NvimBisect"] --> test["Test changed plugins"]
+  saved --> test --> culprit["Likely culprit"]
 ```
 
 - `collector.lua` captures editor state without knowing the plugin manager.
