@@ -1,6 +1,7 @@
 # regression.nvim
 
 [![Tests](https://github.com/cctong/regression.nvim/actions/workflows/test.yaml/badge.svg)](https://github.com/cctong/regression.nvim/actions/workflows/test.yaml)
+[![Neovim](https://img.shields.io/badge/Neovim-%E2%89%A50.10-57A143?logo=neovim&logoColor=white)](https://neovim.io/)
 
 `regression.nvim` answers a practical question:
 
