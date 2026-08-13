@@ -74,7 +74,8 @@ The report opens in a scratch split (`q` to close) and includes:
 - new error messages;
 - missing or unhealthy LSP clients;
 - new `:checkhealth` errors and warnings;
-- added, removed, and changed plugin revisions.
+- added, removed, and changed plugin revisions;
+- added, removed, and changed Neovim config files.
 
 If the regression is reproducible and more than one plugin changed:
 
@@ -192,8 +193,8 @@ dependencies.
   snapshots include them, and falls back to counts for older baselines.
 - LSP comparison reflects clients active when the command runs. Run the command
   after the relevant project buffers and clients have loaded.
-- Configuration changes are reported indirectly through behavior, but v0.1 only
-  bisects plugin revision changes.
+- Configuration file changes are reported, but bisection still only searches
+  plugin revisions.
 
 ## License
 

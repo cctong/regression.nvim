@@ -88,6 +88,47 @@ test("existing baseline errors are not regressions", function()
   equal(false, result.has_regressions)
 end)
 
+test("comparison reports config file changes", function()
+  local baseline = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    config_files = {
+      ["init.lua"] = "aaa",
+      ["lua/old.lua"] = "bbb",
+    },
+  }
+  local current = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    config_files = {
+      ["init.lua"] = "ccc",
+      ["lua/new.lua"] = "ddd",
+    },
+  }
+  local result = require("regression.compare").snapshots(baseline, current)
+  equal(false, result.has_regressions)
+  equal({
+    "config: init.lua changed",
+    "config added: lua/new.lua",
+    "config removed: lua/old.lua",
+  }, result.changes)
+end)
+
+test("collector hashes tracked config files", function()
+  local root = vim.fn.tempname()
+  vim.fn.mkdir(root .. "/lua", "p")
+  vim.fn.writefile({ "vim.g.foo = 1" }, root .. "/init.lua")
+  vim.fn.writefile({ "return {}" }, root .. "/lua/plugins.lua")
+  vim.fn.writefile({ "ignore" }, root .. "/notes.txt")
+  local hashes = require("regression.collector").hash_files(root)
+  equal(vim.fn.sha256("vim.g.foo = 1\n"), hashes["init.lua"])
+  equal(vim.fn.sha256("return {}\n"), hashes["lua/plugins.lua"])
+  equal(nil, hashes["notes.txt"])
+  vim.fn.delete(root, "rf")
+end)
+
 test("comparison reports a replaced health error with the same count", function()
   local baseline = {
     errors = {},

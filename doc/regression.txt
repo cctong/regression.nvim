@@ -13,7 +13,7 @@ CONTENTS                                                    *regression-contents
 
 regression.nvim records a known-good Neovim snapshot and compares the current
 state with it. Snapshots include Neovim version, adapter status, startup time,
-errors, active LSP clients, health messages, and plugin revisions.
+errors, active LSP clients, health messages, config files, and plugin revisions.
 
 lazy.nvim is the default plugin-manager adapter. Set `adapter = "pack"` to use
 Neovim 0.12+ |vim.pack|.

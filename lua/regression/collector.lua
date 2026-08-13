@@ -113,6 +113,47 @@ local function health()
   }
 end
 
+local function should_hash(rel)
+  rel = rel:gsub("\\", "/")
+  return rel == "init.lua"
+    or rel == "init.vim"
+    or rel == "lazy-lock.json"
+    or rel == "nvim-pack-lock.json"
+    or rel:match("^lua/.+%.lua$") ~= nil
+end
+
+function M.hash_files(root)
+  local hashes = {}
+  local function walk(directory, prefix)
+    local handle = vim.uv.fs_scandir(directory)
+    if not handle then
+      return
+    end
+    while true do
+      local name, kind = vim.uv.fs_scandir_next(handle)
+      if not name then
+        break
+      end
+      if name ~= ".git" then
+        local full = directory .. "/" .. name
+        local rel = prefix == "" and name or (prefix .. "/" .. name)
+        if kind == "directory" then
+          walk(full, rel)
+        elseif kind == "file" and should_hash(rel) then
+          local fd = io.open(full, "rb")
+          if fd then
+            local content = fd:read("*a") or ""
+            fd:close()
+            hashes[rel] = vim.fn.sha256(content)
+          end
+        end
+      end
+    end
+  end
+  walk(root, "")
+  return hashes
+end
+
 function M.collect(opts)
   opts = opts or {}
   local adapter, adapter_err = adapters.get(opts.adapter)
@@ -130,6 +171,7 @@ function M.collect(opts)
     errors = errors(),
     lsp = lsp(),
     health = health(),
+    config_files = M.hash_files(vim.fn.stdpath("config")),
     plugins = plugins,
   }
 end
