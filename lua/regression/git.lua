@@ -34,6 +34,55 @@ function M.checkout(plugin, revision_id)
   return true
 end
 
+function M.worktree_add(plugin, revision_id, path)
+  path = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+  if vim.uv.fs_lstat(path) then
+    local removed, remove_err = M.worktree_remove(plugin, path)
+    if not removed then
+      return nil, remove_err
+    end
+  end
+  local result = util.system({
+    "git",
+    "worktree",
+    "add",
+    "--detach",
+    "--quiet",
+    path,
+    revision_id,
+  }, { cwd = plugin.dir })
+  if result.code ~= 0 then
+    return nil, util.trim(result.stderr ~= "" and result.stderr or result.stdout)
+  end
+  return path
+end
+
+function M.worktree_remove(plugin, path)
+  path = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  if not vim.uv.fs_lstat(path) then
+    util.system({ "git", "worktree", "prune" }, { cwd = plugin.dir })
+    return true
+  end
+  local result = util.system({
+    "git",
+    "worktree",
+    "remove",
+    "--force",
+    path,
+  }, { cwd = plugin.dir })
+  if result.code ~= 0 then
+    util.system({ "git", "worktree", "prune" }, { cwd = plugin.dir })
+    local gitfile = vim.uv.fs_lstat(path .. "/.git")
+    if gitfile and gitfile.type == "file" then
+      vim.fn.delete(path, "rf")
+    elseif vim.uv.fs_lstat(path) then
+      return nil, util.trim(result.stderr ~= "" and result.stderr or result.stdout)
+    end
+  end
+  return true
+end
+
 function M.revisions_between(plugin, old_revision, new_revision)
   local result = util.system({
     "git",

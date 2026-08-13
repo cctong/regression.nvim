@@ -20,6 +20,40 @@ require("regression").setup({
   health = { enabled = false },
 })
 
+local function git_in(dir, args)
+  local argv = {
+    "git",
+    "-C",
+    dir,
+    "-c",
+    "user.name=regression",
+    "-c",
+    "user.email=regression@example.com",
+    "-c",
+    "commit.gpgsign=false",
+  }
+  vim.list_extend(argv, args)
+  local result = require("regression.util").system(argv)
+  if result.code ~= 0 then
+    error(result.stderr ~= "" and result.stderr or result.stdout)
+  end
+  return require("regression.util").trim(result.stdout)
+end
+
+local function make_repo(commits)
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  git_in(dir, { "init", "-q" })
+  local shas = {}
+  for index = 1, commits or 4 do
+    vim.fn.writefile({ "v" .. index }, dir .. "/file.txt")
+    git_in(dir, { "add", "file.txt" })
+    git_in(dir, { "commit", "-q", "-m", "commit " .. index })
+    shas[index] = git_in(dir, { "rev-parse", "HEAD" })
+  end
+  return dir, shas
+end
+
 test("plugin commands are registered", function()
   truthy(vim.fn.exists(":NvimBaseline") == 2)
   truthy(vim.fn.exists(":NvimRegression") == 2)
@@ -190,41 +224,49 @@ test("commit search returns a single revision without probing", function()
 end)
 
 test("lazy adapter lists commits between two revisions", function()
-  local dir = vim.fn.tempname()
-  vim.fn.mkdir(dir, "p")
-  local function git(args)
-    local argv = {
-      "git",
-      "-C",
-      dir,
-      "-c",
-      "user.name=regression",
-      "-c",
-      "user.email=regression@example.com",
-      "-c",
-      "commit.gpgsign=false",
-    }
-    vim.list_extend(argv, args)
-    local result = require("regression.util").system(argv)
-    if result.code ~= 0 then
-      error(result.stderr ~= "" and result.stderr or result.stdout)
-    end
-    return require("regression.util").trim(result.stdout)
-  end
-  git({ "init", "-q" })
-  local shas = {}
-  for index = 1, 4 do
-    vim.fn.writefile({ "v" .. index }, dir .. "/file.txt")
-    git({ "add", "file.txt" })
-    git({ "commit", "-q", "-m", "commit " .. index })
-    shas[index] = git({ "rev-parse", "HEAD" })
-  end
+  local dir, shas = make_repo(4)
   local adapter = require("regression.adapters.lazy")
   local plugin = { dir = dir }
   local between = assert(adapter.revisions_between(plugin, shas[1], shas[4]))
   equal({ shas[2], shas[3], shas[4] }, between)
   equal("commit 3", adapter.commit_subject(plugin, shas[3]))
   vim.fn.delete(dir, "rf")
+end)
+
+test("git worktree add leaves the original checkout unchanged", function()
+  local dir, shas = make_repo(3)
+  local git = require("regression.git")
+  local worktree = vim.fn.tempname() .. "/plugin-wt"
+  assert(git.worktree_add({ dir = dir }, shas[1], worktree))
+  equal(shas[1], git.revision(worktree))
+  equal(shas[3], git.revision(dir))
+  equal("v1", vim.fn.readfile(worktree .. "/file.txt")[1])
+  equal("v3", vim.fn.readfile(dir .. "/file.txt")[1])
+  assert(git.worktree_remove({ dir = dir }, worktree))
+  truthy(vim.uv.fs_stat(worktree) == nil)
+  equal(shas[3], git.revision(dir))
+  vim.fn.delete(dir, "rf")
+end)
+
+test("shadow checkout uses a worktree instead of the live plugin dir", function()
+  local real_data = vim.fn.tempname()
+  local dir, shas = make_repo(3)
+  local plugin_dir = real_data .. "/lazy/alpha"
+  vim.fn.mkdir(real_data .. "/lazy", "p")
+  vim.fn.rename(dir, plugin_dir)
+  vim.fn.writefile({ "keep" }, real_data .. "/other.txt")
+  local shadow_mod = require("regression.shadow")
+  local shadow = shadow_mod.create(real_data)
+  local plugin = { dir = plugin_dir }
+  assert(shadow_mod.use_revision(shadow, plugin, shas[1]))
+  equal(shas[1], require("regression.git").revision(shadow_mod.path(shadow, plugin_dir)))
+  equal(shas[3], require("regression.git").revision(plugin_dir))
+  equal("v3", vim.fn.readfile(plugin_dir .. "/file.txt")[1])
+  assert(shadow_mod.use_live(shadow, plugin))
+  equal(shas[3], require("regression.git").revision(plugin_dir))
+  shadow_mod.destroy(shadow)
+  equal(shas[3], require("regression.git").revision(plugin_dir))
+  vim.fn.delete(real_data, "rf")
 end)
 
 test("pack adapter is unavailable without vim.pack", function()

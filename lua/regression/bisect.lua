@@ -1,6 +1,7 @@
 local adapters = require("regression.adapters")
 local compare = require("regression.compare")
 local config = require("regression.config")
+local shadow_mod = require("regression.shadow")
 local util = require("regression.util")
 
 local M = {}
@@ -46,12 +47,19 @@ function M.first_bad(commits, is_bad)
   return commits[lo]
 end
 
-local function probe(baseline)
+local function probe(baseline, env)
   local output = vim.fn.tempname()
   local root = util.plugin_root()
   local escaped_root = vim.fn.fnameescape(root)
   local current_file = vim.api.nvim_buf_get_name(0)
   local expected_lsp = util.sorted_keys(baseline.lsp or {})
+  env = vim.tbl_extend("force", {
+    REGRESSION_PROBE_OUTPUT = output,
+    REGRESSION_SKIP_STARTUP = "1",
+    REGRESSION_PROBE_FILE = current_file,
+    REGRESSION_PROBE_SETTLE_MS = tostring(config.options.bisect.settle_ms),
+    REGRESSION_EXPECTED_LSP = vim.json.encode(expected_lsp),
+  }, env or {})
   local result = util.system({
     vim.v.progpath,
     "--headless",
@@ -59,13 +67,7 @@ local function probe(baseline)
     "-c", "lua require('regression.probe').run()",
     "-c", "qa!",
   }, {
-    env = {
-      REGRESSION_PROBE_OUTPUT = output,
-      REGRESSION_SKIP_STARTUP = "1",
-      REGRESSION_PROBE_FILE = current_file,
-      REGRESSION_PROBE_SETTLE_MS = tostring(config.options.bisect.settle_ms),
-      REGRESSION_EXPECTED_LSP = vim.json.encode(expected_lsp),
-    },
+    env = env,
     timeout = config.options.bisect.timeout_ms,
   })
   local snapshot
@@ -122,20 +124,42 @@ function M.run(baseline, current, on_progress)
   local function progress(message)
     if on_progress then on_progress(message) end
   end
+
+  local shadow = shadow_mod.create()
+  local in_place = {}
+  local function probe_now(baseline_snapshot)
+    return probe(baseline_snapshot, { XDG_DATA_HOME = shadow.home })
+  end
+  local function place(candidate, revision)
+    if shadow_mod.path(shadow, candidate.plugin.dir) then
+      return shadow_mod.use_revision(shadow, candidate.plugin, revision)
+    end
+    in_place[candidate.name] = true
+    return adapter.checkout(candidate.plugin, revision)
+  end
   local function checkout_all(revision_key)
     for _, candidate in ipairs(candidates) do
-      local ok, err = adapter.checkout(candidate.plugin, candidate[revision_key])
+      local ok, err = place(candidate, candidate[revision_key])
       if not ok then return nil, candidate.name .. ": " .. tostring(err) end
     end
     return true
   end
   local function restore()
-    return checkout_all("restore_ref")
+    for _, candidate in ipairs(candidates) do
+      local ok, err
+      if in_place[candidate.name] then
+        ok, err = adapter.checkout(candidate.plugin, candidate.restore_ref)
+      else
+        ok, err = shadow_mod.use_live(shadow, candidate.plugin)
+      end
+      if not ok then return nil, candidate.name .. ": " .. tostring(err) end
+    end
+    return true
   end
 
   local ok, value = xpcall(function()
     progress("Checking current revisions...")
-    local current_probe, current_err = probe(baseline)
+    local current_probe, current_err = probe_now(baseline)
     if not current_probe then error(current_err) end
     if not current_probe.has_regressions then
       error("the regression is not reproducible in a clean headless Neovim")
@@ -144,7 +168,7 @@ function M.run(baseline, current, on_progress)
     progress("Verifying the baseline revisions...")
     local checked, checkout_err = checkout_all("old_revision")
     if not checked then error(checkout_err) end
-    local baseline_probe, baseline_err = probe(baseline)
+    local baseline_probe, baseline_err = probe_now(baseline)
     if not baseline_probe then error(baseline_err) end
     if baseline_probe.has_regressions then
       error("baseline plugin revisions do not reproduce a healthy state; config or external state may have changed")
@@ -156,11 +180,11 @@ function M.run(baseline, current, on_progress)
       local names = {}
       for _, candidate in ipairs(group) do
         names[#names + 1] = candidate.name
-        local switched, switch_err = adapter.checkout(candidate.plugin, candidate.old_revision)
+        local switched, switch_err = place(candidate, candidate.old_revision)
         if not switched then error(switch_err) end
       end
       progress("Testing with baseline revisions: " .. table.concat(names, ", "))
-      local result, probe_err = probe(baseline)
+      local result, probe_err = probe_now(baseline)
       if not result then error(probe_err) end
       return not result.has_regressions
     end)
@@ -177,10 +201,10 @@ function M.run(baseline, current, on_progress)
       elseif #commits > 0 then
         culprit.first_bad_revision = M.first_bad(commits, function(revision)
           assert(restore())
-          local switched, switch_err = adapter.checkout(culprit.plugin, revision)
+          local switched, switch_err = place(culprit, revision)
           if not switched then error(switch_err) end
           progress("Testing " .. culprit.name .. " at " .. revision:sub(1, 8))
-          local result, probe_err = probe(baseline)
+          local result, probe_err = probe_now(baseline)
           if not result then error(probe_err) end
           return result.has_regressions
         end)
@@ -193,8 +217,12 @@ function M.run(baseline, current, on_progress)
   end, debug.traceback)
 
   local restored, restore_err = restore()
+  local destroyed, destroy_err = shadow_mod.destroy(shadow)
   if not restored then
     return nil, "bisect failed to restore current revisions: " .. tostring(restore_err)
+  end
+  if not destroyed then
+    return nil, "bisect failed to remove temporary worktrees: " .. tostring(destroy_err)
   end
   if not ok then
     return nil, tostring(value):match("^[^\n]+")

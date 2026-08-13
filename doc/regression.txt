@@ -63,9 +63,10 @@ The baseline is stored under stdpath("state")/regression.nvim by default.
 ==============================================================================
 4. Bisection                                            *regression-bisection*
 
-Bisection temporarily checks plugin repositories out at revisions recorded in
-the baseline. It refuses dirty repositories, verifies baseline revisions, and
-restores current revisions when it finishes or encounters an error.
+Bisection probes plugin revisions from temporary git worktrees so installed
+checkouts stay untouched. Plugins loaded from a custom dir outside
+stdpath("data") still use an in-place checkout. It refuses dirty repositories,
+verifies baseline revisions, and removes the worktrees when it finishes.
 
 Bisection first searches the set of changed plugins, then the commits inside
 the likely culprit. It assumes a single primary culprit. Do not run plugin
