@@ -44,8 +44,7 @@ function M.format(comparison)
   return table.concat(lines, "\n")
 end
 
-function M.show(comparison)
-  local lines = vim.split(M.format(comparison), "\n", { plain = true })
+function M.show_lines(lines)
   local buf = find_report_buf()
   if not buf then
     buf = vim.api.nvim_create_buf(false, true)
@@ -61,6 +60,10 @@ function M.show(comparison)
   vim.bo[buf].filetype = "regression"
   show_buf(buf)
   return buf
+end
+
+function M.show(comparison)
+  return M.show_lines(vim.split(M.format(comparison), "\n", { plain = true }))
 end
 
 return M

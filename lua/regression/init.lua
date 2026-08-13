@@ -43,6 +43,10 @@ function M.regression()
   return result
 end
 
+function M.health()
+  return require("regression.health").run()
+end
+
 function M.bisect()
   local baseline = load_baseline()
   if not baseline then return end

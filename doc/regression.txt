@@ -55,6 +55,12 @@ The baseline is stored under stdpath("state")/regression.nvim by default.
         Capture the current state, compare it with the baseline, and open the
         report in a scratch split. Press |q| to close the report.
 
+                                                          *:NvimHealth*
+:NvimHealth
+        Check the regression.nvim setup: Neovim version, adapter
+        availability, storage directory, and baseline validity. Opens the
+        results in a scratch split.
+
                                                           *:NvimBisect*
 :NvimBisect
         Binary-search changed plugins, then the culprit plugin's commits,
