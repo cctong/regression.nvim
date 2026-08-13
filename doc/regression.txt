@@ -55,8 +55,8 @@ The baseline is stored under stdpath("state")/regression.nvim by default.
 
                                                           *:NvimBisect*
 :NvimBisect
-        Binary-search changed lazy.nvim plugins using headless probes. See
-        |regression-bisection|.
+        Binary-search changed lazy.nvim plugins, then the culprit plugin's
+        commits, using headless probes. See |regression-bisection|.
 
 ==============================================================================
 4. Bisection                                            *regression-bisection*
@@ -65,8 +65,8 @@ Bisection temporarily checks plugin repositories out at revisions recorded in
 the baseline. It refuses dirty repositories, verifies baseline revisions, and
 restores current revisions when it finishes or encounters an error.
 
-Version 0.1 searches the set of changed plugins and assumes a single primary
-culprit. It does not search commits within an individual plugin. Do not run
-lazy.nvim updates at the same time.
+Bisection first searches the set of changed plugins, then the commits inside
+the likely culprit. It assumes a single primary culprit. Do not run lazy.nvim
+updates at the same time.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

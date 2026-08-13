@@ -171,6 +171,62 @@ test("bisect set search locates the reverted group that heals", function()
   equal("charlie", culprit)
 end)
 
+test("commit search finds the first bad revision", function()
+  local commits = { "c1", "c2", "c3", "c4", "c5" }
+  local first = require("regression.bisect").first_bad(commits, function(commit)
+    return commit >= "c4"
+  end)
+  equal("c4", first)
+end)
+
+test("commit search returns a single revision without probing", function()
+  local probed = false
+  local first = require("regression.bisect").first_bad({ "only" }, function()
+    probed = true
+    return true
+  end)
+  equal("only", first)
+  equal(false, probed)
+end)
+
+test("lazy adapter lists commits between two revisions", function()
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir, "p")
+  local function git(args)
+    local argv = {
+      "git",
+      "-C",
+      dir,
+      "-c",
+      "user.name=regression",
+      "-c",
+      "user.email=regression@example.com",
+      "-c",
+      "commit.gpgsign=false",
+    }
+    vim.list_extend(argv, args)
+    local result = require("regression.util").system(argv)
+    if result.code ~= 0 then
+      error(result.stderr ~= "" and result.stderr or result.stdout)
+    end
+    return require("regression.util").trim(result.stdout)
+  end
+  git({ "init", "-q" })
+  local shas = {}
+  for index = 1, 4 do
+    vim.fn.writefile({ "v" .. index }, dir .. "/file.txt")
+    git({ "add", "file.txt" })
+    git({ "commit", "-q", "-m", "commit " .. index })
+    shas[index] = git({ "rev-parse", "HEAD" })
+  end
+  local adapter = require("regression.adapters.lazy")
+  local plugin = { dir = dir }
+  local between = assert(adapter.revisions_between(plugin, shas[1], shas[4]))
+  equal({ shas[2], shas[3], shas[4] }, between)
+  equal("commit 3", adapter.commit_subject(plugin, shas[3]))
+  vim.fn.delete(dir, "rf")
+end)
+
 for _, item in ipairs(tests) do
   local ok, err = xpcall(item.fn, debug.traceback)
   if ok then
