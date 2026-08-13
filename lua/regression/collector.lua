@@ -84,17 +84,32 @@ local function health()
     end
   end
   local failures, warnings = 0, 0
+  local failure_messages, warning_messages = {}, {}
+  local seen_failures, seen_warnings = {}, {}
   for _, line in ipairs(util.lines(text)) do
+    line = util.trim(line)
     if line:match("%- ERROR") or line:match("ERROR:") then
       failures = failures + 1
+      if line ~= "" and not seen_failures[line] then
+        seen_failures[line] = true
+        failure_messages[#failure_messages + 1] = line
+      end
     elseif line:match("%- WARNING") or line:match("WARN") then
       warnings = warnings + 1
+      if line ~= "" and not seen_warnings[line] then
+        seen_warnings[line] = true
+        warning_messages[#warning_messages + 1] = line
+      end
     end
   end
+  table.sort(failure_messages)
+  table.sort(warning_messages)
   return {
     failures = failures,
     warnings = warnings,
     command_ok = ok,
+    failure_messages = failure_messages,
+    warning_messages = warning_messages,
   }
 end
 

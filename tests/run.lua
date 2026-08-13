@@ -54,6 +54,52 @@ test("existing baseline errors are not regressions", function()
   equal(false, result.has_regressions)
 end)
 
+test("comparison reports a replaced health error with the same count", function()
+  local baseline = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    health = {
+      failures = 1,
+      warnings = 1,
+      failure_messages = { "- ERROR: old provider missing" },
+      warning_messages = { "- WARNING: parser outdated" },
+    },
+  }
+  local current = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    health = {
+      failures = 1,
+      warnings = 1,
+      failure_messages = { "- ERROR: treesitter highlight failed" },
+      warning_messages = { "- WARNING: parser outdated" },
+    },
+  }
+  local result = require("regression.compare").snapshots(baseline, current)
+  truthy(result.has_regressions)
+  equal(1, #result.regressions)
+  equal("health", result.regressions[1].kind)
+  equal("- ERROR: treesitter highlight failed", result.regressions[1].message)
+end)
+
+test("comparison ignores health messages already present in the baseline", function()
+  local snapshot = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    health = {
+      failures = 1,
+      warnings = 1,
+      failure_messages = { "- ERROR: old provider missing" },
+      warning_messages = { "- WARNING: parser outdated" },
+    },
+  }
+  local result = require("regression.compare").snapshots(snapshot, vim.deepcopy(snapshot))
+  equal(false, result.has_regressions)
+end)
+
 test("comparison reports a neovim version change", function()
   local baseline = { nvim_version = "0.10.0", errors = {}, lsp = {}, plugins = {} }
   local current = { nvim_version = "0.11.0", errors = {}, lsp = {}, plugins = {} }
