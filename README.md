@@ -9,18 +9,17 @@
 > probably responsible?
 
 It records a known-good snapshot, compares the current session with that
-snapshot, and can binary-search changed lazy.nvim plugin revisions using clean,
-headless Neovim probes.
+snapshot, and can binary-search changed plugin revisions using clean, headless
+Neovim probes.
 
-This is a deliberately small v0.1. It supports lazy.nvim first and keeps plugin
-manager operations behind an adapter so `vim.pack` can be added without changing
-the collector or comparison engine.
+Plugin-manager operations live behind an adapter. lazy.nvim is the default;
+`vim.pack` (Neovim 0.12+) is also supported.
 
 ## Requirements
 
 - Neovim 0.10 or newer
 - Git
-- lazy.nvim (for plugin revision capture and bisection)
+- lazy.nvim, or Neovim 0.12+ with `vim.pack`
 
 ## Installation
 
@@ -33,6 +32,13 @@ With lazy.nvim:
     require("regression").setup()
   end,
 }
+```
+
+With `vim.pack`:
+
+```lua
+vim.pack.add({ "https://github.com/cctong/regression.nvim" })
+require("regression").setup({ adapter = "pack" })
 ```
 
 For local development:
@@ -70,7 +76,7 @@ The report opens in a scratch split (`q` to close) and includes:
 - new `:checkhealth` errors and warnings;
 - added, removed, and changed plugin revisions.
 
-If the regression is reproducible and more than one lazy.nvim plugin changed:
+If the regression is reproducible and more than one plugin changed:
 
 ```vim
 :NvimBisect
@@ -90,7 +96,7 @@ Defaults are intentionally conservative:
 ```lua
 require("regression").setup({
   profile = "default",
-  adapter = "lazy",
+  adapter = "lazy", -- or "pack" for vim.pack
   storage_dir = vim.fn.stdpath("state") .. "/regression.nvim",
   startup = {
     enabled = true,
@@ -134,8 +140,8 @@ Before changing any checkout, bisection:
 4. verifies the all-baseline state is healthy;
 5. restores all current revisions on success or failure.
 
-The command operates directly on lazy.nvim's plugin checkout directories. Do not
-run a lazy.nvim update concurrently with a bisect.
+The command operates directly on plugin checkout directories. Do not run a
+plugin-manager update concurrently with a bisect.
 
 Headless probes reopen the current file and wait up to `settle_ms` for LSP
 clients to initialize. Increase this value if your language servers start
@@ -154,13 +160,14 @@ flowchart LR
 ```
 
 - `collector.lua` captures editor state without knowing the plugin manager.
-- `adapters/lazy.lua` owns discovery and revision checkout operations.
+- `adapters/lazy.lua` and `adapters/pack.lua` own plugin discovery.
+- `git.lua` owns revision checkout operations shared by both adapters.
 - `compare.lua` is a side-effect-free snapshot comparison.
 - `bisect.lua` owns probe orchestration and guaranteed restoration.
 - `store.lua` persists versioned JSON snapshots atomically.
 
-A future `vim.pack` adapter only needs to implement the adapter contract used by
-`adapters/lazy.lua`.
+A new plugin manager only needs to implement the adapter contract used by
+`adapters/lazy.lua` and `adapters/pack.lua`.
 
 ## Testing
 

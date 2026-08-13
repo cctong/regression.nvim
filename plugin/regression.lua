@@ -19,6 +19,6 @@ end, {
 vim.api.nvim_create_user_command("NvimBisect", function()
   require("regression").bisect()
 end, {
-  desc = "Bisect changed lazy.nvim plugins to find a likely regression",
+  desc = "Bisect changed plugins to find a likely regression",
 })
 

@@ -1,26 +1,17 @@
-local util = require("regression.util")
+local git = require("regression.git")
 
 local M = {
   name = "lazy",
   unavailable_message = "lazy.nvim is not loaded; call require('lazy').setup() before using regression.nvim",
+  is_dirty = git.is_dirty,
+  has_revision = git.has_revision,
+  checkout = git.checkout,
+  revisions_between = git.revisions_between,
+  commit_subject = git.commit_subject,
 }
 
 function M.available()
   return package.loaded["lazy.core.config"] ~= nil or pcall(require, "lazy.core.config")
-end
-
-local function revision(dir)
-  local result = util.system({ "git", "rev-parse", "HEAD" }, { cwd = dir })
-  if result.code == 0 then
-    return util.trim(result.stdout)
-  end
-end
-
-local function head_ref(dir)
-  local result = util.system({ "git", "symbolic-ref", "--quiet", "--short", "HEAD" }, { cwd = dir })
-  if result.code == 0 then
-    return util.trim(result.stdout)
-  end
 end
 
 function M.plugins()
@@ -33,57 +24,12 @@ function M.plugins()
         name = name,
         dir = vim.fs.normalize(plugin.dir),
         url = plugin.url,
-        revision = revision(plugin.dir),
-        head_ref = head_ref(plugin.dir),
+        revision = git.revision(plugin.dir),
+        head_ref = git.head_ref(plugin.dir),
       }
     end
   end
   return plugins
-end
-
-function M.is_dirty(plugin)
-  local result = util.system({ "git", "status", "--porcelain" }, { cwd = plugin.dir })
-  return result.code ~= 0 or util.trim(result.stdout) ~= ""
-end
-
-function M.has_revision(plugin, revision_id)
-  local result = util.system({ "git", "cat-file", "-e", revision_id .. "^{commit}" }, { cwd = plugin.dir })
-  return result.code == 0
-end
-
-function M.checkout(plugin, revision_id)
-  local result = util.system({ "git", "checkout", "--quiet", "--detach", revision_id }, { cwd = plugin.dir })
-  if result.code ~= 0 then
-    return nil, util.trim(result.stderr ~= "" and result.stderr or result.stdout)
-  end
-  return true
-end
-
-function M.revisions_between(plugin, old_revision, new_revision)
-  local result = util.system({
-    "git",
-    "rev-list",
-    "--reverse",
-    old_revision .. ".." .. new_revision,
-  }, { cwd = plugin.dir })
-  if result.code ~= 0 then
-    return nil, util.trim(result.stderr ~= "" and result.stderr or result.stdout)
-  end
-  local commits = {}
-  for _, line in ipairs(util.lines(result.stdout)) do
-    line = util.trim(line)
-    if line ~= "" then
-      commits[#commits + 1] = line
-    end
-  end
-  return commits
-end
-
-function M.commit_subject(plugin, revision_id)
-  local result = util.system({ "git", "log", "-1", "--format=%s", revision_id }, { cwd = plugin.dir })
-  if result.code == 0 then
-    return util.trim(result.stdout)
-  end
 end
 
 return M
