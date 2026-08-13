@@ -1,4 +1,5 @@
 local config = require("regression.config")
+local snapshot_schema = require("regression.snapshot")
 
 local M = {}
 
@@ -23,12 +24,20 @@ function M.load()
   fd:close()
   local ok, decoded = pcall(vim.json.decode, content)
   if not ok then
-    return nil, "invalid baseline: " .. tostring(decoded)
+    return nil, "invalid JSON: " .. tostring(decoded)
+  end
+  local valid, validation_error = snapshot_schema.validate(decoded)
+  if not valid then
+    return nil, validation_error
   end
   return decoded
 end
 
 function M.save(snapshot)
+  local valid, validation_error = snapshot_schema.validate(snapshot)
+  if not valid then
+    return nil, validation_error
+  end
   vim.fn.mkdir(config.options.storage_dir, "p")
   local target = path()
   local temporary = target .. ".tmp"

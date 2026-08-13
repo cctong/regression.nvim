@@ -1,5 +1,6 @@
 local adapters = require("regression.adapters")
 local config = require("regression.config")
+local snapshot = require("regression.snapshot")
 local util = require("regression.util")
 
 local M = {}
@@ -162,7 +163,7 @@ function M.collect(opts)
     plugins = adapter.plugins()
   end
   return {
-    schema_version = 1,
+    schema_version = snapshot.SCHEMA_VERSION,
     captured_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     nvim_version = tostring(vim.version()),
     adapter = adapter and adapter.name or config.options.adapter,

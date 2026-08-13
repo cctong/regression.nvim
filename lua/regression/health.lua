@@ -72,7 +72,7 @@ local function baseline_check()
   if not baseline then
     return {
       level = "error",
-      text = string.format("baseline is invalid: %s", err),
+      text = string.format("baseline is invalid: %s; update regression.nvim or use :NvimBaseline! to replace it", err),
     }
   end
   return {

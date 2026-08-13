@@ -61,6 +61,9 @@ The baseline is stored under stdpath("state")/regression.nvim by default.
         availability, storage directory, and baseline validity. Opens the
         results in a scratch split.
 
+        If |:NvimHealth| reports an invalid or unsupported baseline, update
+        regression.nvim or use |:NvimBaseline!| to replace it.
+
                                                           *:NvimBisect*
 :NvimBisect
         Binary-search changed plugins, then the culprit plugin's commits,

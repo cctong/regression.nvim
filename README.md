@@ -127,6 +127,9 @@ stdpath("state")/regression.nvim/default.json
 
 Use different `profile` values for separate configurations.
 
+If `:NvimHealth` reports an invalid or unsupported baseline, update
+regression.nvim or use `:NvimBaseline!` to replace it.
+
 ## What bisection means
 
 The command first bisects the **set of plugins changed since the baseline**, then

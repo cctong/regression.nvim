@@ -15,6 +15,22 @@ local function truthy(value, message)
   if not value then error(message or "expected a truthy value") end
 end
 
+local function valid_snapshot(overrides)
+  local snapshot = {
+    schema_version = 1,
+    captured_at = "2026-01-01T00:00:00Z",
+    nvim_version = "0.10.0",
+    adapter = "lazy",
+    errors = {},
+    lsp = {},
+    plugins = {},
+  }
+  if overrides then
+    snapshot = vim.tbl_deep_extend("force", snapshot, overrides)
+  end
+  return snapshot
+end
+
 require("regression").setup({
   startup = { enabled = false },
   health = { enabled = false },
@@ -232,10 +248,101 @@ test("store round-trips a snapshot", function()
     health = { enabled = false },
   })
   local store = require("regression.store")
-  local snapshot = { schema_version = 1, errors = {}, plugins = { one = { revision = "abc" } } }
+  local snapshot = valid_snapshot({ plugins = { one = { revision = "abc" } } })
   local path = assert(store.save(snapshot))
   truthy(vim.uv.fs_stat(path) ~= nil)
   equal(snapshot, assert(store.load()))
+  vim.fn.delete(directory, "rf")
+end)
+
+test("collector emits a valid snapshot", function()
+  local snapshot = require("regression.collector").collect()
+  local ok, err = require("regression.snapshot").validate(snapshot)
+  truthy(ok, "collector snapshot failed validation: " .. tostring(err))
+end)
+
+test("store loads an initial schema baseline", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    profile = "test",
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local store = require("regression.store")
+  vim.fn.mkdir(directory, "p")
+  local fixture = valid_snapshot()
+  vim.fn.writefile({ vim.json.encode(fixture) }, store.path())
+  equal(fixture, assert(store.load()))
+  vim.fn.delete(directory, "rf")
+end)
+
+test("store rejects non-object baselines", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    profile = "test",
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local store = require("regression.store")
+  vim.fn.mkdir(directory, "p")
+  for _, content in ipairs({ "null", "[]", '"not an object"' }) do
+    vim.fn.writefile({ content }, store.path())
+    local loaded, err = store.load()
+    equal(nil, loaded, "expected nil baseline for " .. content)
+    equal("baseline must be a JSON object", err)
+  end
+  vim.fn.delete(directory, "rf")
+end)
+
+test("store rejects unsupported baseline schemas", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    profile = "test",
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local store = require("regression.store")
+  vim.fn.mkdir(directory, "p")
+  vim.fn.writefile({ vim.json.encode(valid_snapshot({ schema_version = 2 })) }, store.path())
+  local loaded, err = store.load()
+  equal(nil, loaded)
+  equal("unsupported baseline schema version 2 (supported: 1)", err)
+  vim.fn.delete(directory, "rf")
+end)
+
+test("store rejects malformed nested baseline fields", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    profile = "test",
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local store = require("regression.store")
+  vim.fn.mkdir(directory, "p")
+  vim.fn.writefile({ vim.json.encode(valid_snapshot({ plugins = { alpha = "not an object" } })) }, store.path())
+  local loaded, err = store.load()
+  equal(nil, loaded)
+  equal('baseline field "plugins.alpha" must be an object', err)
+  vim.fn.delete(directory, "rf")
+end)
+
+test("store rejects invalid snapshots before saving", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    profile = "test",
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local store = require("regression.store")
+  local path, err = store.save(valid_snapshot({ plugins = { alpha = "not an object" } }))
+  equal(nil, path)
+  equal('baseline field "plugins.alpha" must be an object', err)
+  equal(nil, vim.uv.fs_stat(directory))
   vim.fn.delete(directory, "rf")
 end)
 
@@ -391,12 +498,39 @@ test("health flags an invalid baseline", function()
   vim.fn.writefile({ "not json" }, directory .. "/default.json")
   local found
   for _, item in ipairs(require("regression.health").check()) do
-    if item.level == "error" and item.text:match("baseline is invalid") then
+    if item.level == "error"
+      and item.text:match("^baseline is invalid: invalid JSON:")
+      and item.text:match("; update regression%.nvim or use :NvimBaseline! to replace it$")
+    then
       found = item
       break
     end
   end
-  truthy(found, "expected an invalid-baseline error")
+  truthy(found, "expected an invalid-baseline error with recovery action")
+  vim.fn.delete(directory, "rf")
+end)
+
+test("health flags an unsupported baseline schema", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  vim.fn.mkdir(directory, "p")
+  vim.fn.writefile({ vim.json.encode(valid_snapshot({ schema_version = 2 })) }, directory .. "/default.json")
+  local baseline_items = {}
+  for _, item in ipairs(require("regression.health").check()) do
+    if item.text:match("baseline") then
+      baseline_items[#baseline_items + 1] = item
+    end
+  end
+  equal(1, #baseline_items)
+  equal("error", baseline_items[1].level)
+  equal(
+    "baseline is invalid: unsupported baseline schema version 2 (supported: 1); update regression.nvim or use :NvimBaseline! to replace it",
+    baseline_items[1].text
+  )
   vim.fn.delete(directory, "rf")
 end)
 
@@ -407,7 +541,7 @@ test("health accepts a valid baseline", function()
     startup = { enabled = false },
     health = { enabled = false },
   })
-  require("regression.store").save({ plugins = { alpha = {} }, captured_at = "2026-01-01T00:00:00Z" })
+  assert(require("regression.store").save(valid_snapshot({ plugins = { alpha = {} } })))
   local found
   for _, item in ipairs(require("regression.health").check()) do
     if item.text:match("baseline") then
@@ -433,6 +567,44 @@ test("health run opens a scratch buffer", function()
   require("regression.health").run()
   truthy(vim.api.nvim_buf_get_name(0):match("regression://report$"))
   equal("regression.nvim health", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
+  vim.fn.delete(directory, "rf")
+end)
+
+test("regression and bisect stop before collecting with an invalid baseline", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  vim.fn.mkdir(directory, "p")
+  vim.fn.writefile({ vim.json.encode(valid_snapshot({ schema_version = 2 })) }, directory .. "/default.json")
+
+  local real_collector = package.loaded["regression.collector"]
+  local real_notify = vim.notify
+  local messages = {}
+  package.loaded["regression.collector"] = { collect = function() error("collector stub reached") end }
+  vim.notify = function(message, level, opts)
+    messages[#messages + 1] = tostring(message)
+  end
+
+  local ok, failure = xpcall(function()
+    local regression = require("regression")
+    equal(nil, regression.regression())
+    equal(nil, regression.bisect())
+  end, debug.traceback)
+
+  vim.notify = real_notify
+  package.loaded["regression.collector"] = real_collector
+
+  if not ok then
+    error(failure)
+  end
+  truthy(#messages >= 2, "expected a notification from regression and one from bisect")
+  for _, message in ipairs(messages) do
+    truthy(message:match("No readable baseline%. Update regression%.nvim or use :NvimBaseline! to replace it%."))
+    truthy(message:match("unsupported baseline schema version 2 %(supported: 1%)"))
+  end
   vim.fn.delete(directory, "rf")
 end)
 
