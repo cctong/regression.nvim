@@ -78,7 +78,8 @@ If the regression is reproducible and more than one lazy.nvim plugin changed:
 
 The bisect command temporarily checks changed plugins out at their baseline
 revisions, starts clean headless Neovim instances, and narrows the changed set to
-one likely culprit. It restores the current revisions before returning.
+one likely culprit. It then bisects that plugin's commits between the baseline
+and current revisions. It restores the current revisions before returning.
 
 Use `:NvimBaseline!` to replace an existing baseline.
 
@@ -117,12 +118,13 @@ stdpath("state")/regression.nvim/default.json
 
 Use different `profile` values for separate configurations.
 
-## What bisection means in v0.1
+## What bisection means
 
-The command bisects the **set of plugins changed since the baseline**. It does
-not yet bisect every commit inside one plugin's old-to-new revision range. The
-algorithm assumes one changed plugin is the primary cause. Interactions between
-multiple plugins can produce an inconclusive or misleading answer.
+The command first bisects the **set of plugins changed since the baseline**, then
+bisects commits inside the likely culprit from the baseline revision to the
+current one. The plugin search assumes one changed plugin is the primary cause.
+Interactions between multiple plugins can produce an inconclusive or misleading
+answer.
 
 Before changing any checkout, bisection:
 

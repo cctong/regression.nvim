@@ -28,6 +28,24 @@ function M.locate(candidates, test_reverted)
   return suspects[1]
 end
 
+-- Binary-search commits ordered oldest to newest. is_bad(revision) is true when
+-- that revision still reproduces the regression. The last commit is assumed bad.
+function M.first_bad(commits, is_bad)
+  if not commits or #commits == 0 then
+    return nil
+  end
+  local lo, hi = 1, #commits
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    if is_bad(commits[mid]) then
+      hi = mid
+    else
+      lo = mid + 1
+    end
+  end
+  return commits[lo]
+end
+
 local function probe(baseline)
   local output = vim.fn.tempname()
   local root = util.plugin_root()
@@ -146,6 +164,31 @@ function M.run(baseline, current, on_progress)
       if not result then error(probe_err) end
       return not result.has_regressions
     end)
+
+    if adapter.revisions_between then
+      progress("Bisecting commits in " .. culprit.name .. "...")
+      local commits, commits_err = adapter.revisions_between(
+        culprit.plugin,
+        culprit.old_revision,
+        culprit.new_revision
+      )
+      if not commits then
+        progress("Could not list commits in " .. culprit.name .. ": " .. tostring(commits_err))
+      elseif #commits > 0 then
+        culprit.first_bad_revision = M.first_bad(commits, function(revision)
+          assert(restore())
+          local switched, switch_err = adapter.checkout(culprit.plugin, revision)
+          if not switched then error(switch_err) end
+          progress("Testing " .. culprit.name .. " at " .. revision:sub(1, 8))
+          local result, probe_err = probe(baseline)
+          if not result then error(probe_err) end
+          return result.has_regressions
+        end)
+        if adapter.commit_subject then
+          culprit.first_bad_subject = adapter.commit_subject(culprit.plugin, culprit.first_bad_revision)
+        end
+      end
+    end
     return culprit
   end, debug.traceback)
 

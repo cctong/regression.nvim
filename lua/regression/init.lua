@@ -55,12 +55,24 @@ function M.bisect()
     util.notify("Bisect stopped: " .. tostring(err), vim.log.levels.ERROR)
     return
   end
-  util.notify(string.format(
-    "Likely culprit: %s (%s -> %s). Current revisions were restored.",
+  local message = string.format(
+    "Likely culprit: %s (%s -> %s).",
     culprit.name,
     culprit.old_revision:sub(1, 8),
     culprit.new_revision:sub(1, 8)
-  ), vim.log.levels.WARN)
+  )
+  if culprit.first_bad_revision then
+    if culprit.first_bad_subject and culprit.first_bad_subject ~= "" then
+      message = message .. string.format(
+        " First bad commit: %s %s.",
+        culprit.first_bad_revision:sub(1, 8),
+        culprit.first_bad_subject
+      )
+    else
+      message = message .. string.format(" First bad commit: %s.", culprit.first_bad_revision:sub(1, 8))
+    end
+  end
+  util.notify(message .. " Current revisions were restored.", vim.log.levels.WARN)
   return culprit
 end
 
