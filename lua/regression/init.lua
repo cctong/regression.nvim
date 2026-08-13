@@ -22,9 +22,17 @@ function M.baseline(opts)
 end
 
 local function load_baseline()
-  local baseline, err = require("regression.store").load()
+  local store = require("regression.store")
+  if not store.exists() then
+    require("regression.util").notify("No baseline. Run :NvimBaseline first.", vim.log.levels.ERROR)
+    return
+  end
+  local baseline, err = store.load()
   if not baseline then
-    require("regression.util").notify("No readable baseline. Run :NvimBaseline first. " .. tostring(err or ""), vim.log.levels.ERROR)
+    require("regression.util").notify(
+      "No readable baseline. Update regression.nvim or use :NvimBaseline! to replace it. " .. tostring(err or ""),
+      vim.log.levels.ERROR
+    )
   end
   return baseline
 end
