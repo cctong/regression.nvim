@@ -60,8 +60,10 @@ After updating plugins or configuration:
 :NvimRegression
 ```
 
-The report includes:
+The report opens in a scratch split (`q` to close) and includes:
 
+- plugin-manager adapter failures;
+- Neovim version changes;
 - startup-time regressions;
 - new error messages;
 - missing or unhealthy LSP clients;

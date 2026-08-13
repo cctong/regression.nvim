@@ -54,6 +54,53 @@ test("existing baseline errors are not regressions", function()
   equal(false, result.has_regressions)
 end)
 
+test("comparison reports a neovim version change", function()
+  local baseline = { nvim_version = "0.10.0", errors = {}, lsp = {}, plugins = {} }
+  local current = { nvim_version = "0.11.0", errors = {}, lsp = {}, plugins = {} }
+  local result = require("regression.compare").snapshots(baseline, current)
+  equal(false, result.has_regressions)
+  equal({ "neovim: 0.10.0 -> 0.11.0" }, result.changes)
+end)
+
+test("comparison reports a new adapter failure as a regression", function()
+  local baseline = { errors = {}, lsp = {}, plugins = {} }
+  local current = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    adapter_error = "lazy.nvim is not loaded; call require('lazy').setup() before using regression.nvim",
+  }
+  local result = require("regression.compare").snapshots(baseline, current)
+  truthy(result.has_regressions)
+  equal(1, #result.regressions)
+  equal("adapter", result.regressions[1].kind)
+end)
+
+test("comparison ignores an adapter failure already present in the baseline", function()
+  local snapshot = {
+    errors = {},
+    lsp = {},
+    plugins = {},
+    adapter_error = "lazy.nvim is not loaded",
+  }
+  local result = require("regression.compare").snapshots(snapshot, vim.deepcopy(snapshot))
+  equal(false, result.has_regressions)
+end)
+
+test("report opens a scratch buffer with the comparison", function()
+  local comparison = {
+    has_regressions = true,
+    regressions = { { kind = "error", message = "Error: broken" } },
+    changes = { "neovim: 0.10.0 -> 0.11.0" },
+    plugin_changes = {},
+  }
+  local report = require("regression.report")
+  local buf = report.show(comparison)
+  truthy(vim.api.nvim_buf_is_valid(buf))
+  equal("nofile", vim.bo[buf].buftype)
+  equal(report.format(comparison), table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+end)
+
 test("store round-trips a snapshot", function()
   local directory = vim.fn.tempname()
   require("regression").setup({
