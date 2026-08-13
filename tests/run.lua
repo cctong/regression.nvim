@@ -57,6 +57,7 @@ end
 test("plugin commands are registered", function()
   truthy(vim.fn.exists(":NvimBaseline") == 2)
   truthy(vim.fn.exists(":NvimRegression") == 2)
+  truthy(vim.fn.exists(":NvimHealth") == 2)
   truthy(vim.fn.exists(":NvimBisect") == 2)
 end)
 
@@ -341,6 +342,98 @@ test("pack adapter maps vim.pack plugins", function()
   equal("abc123def", plugins.example.revision)
   rawset(vim, "pack", previous)
   vim.fn.delete(dir, "rf")
+end)
+
+test("health reports adapter problems", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local found
+  for _, item in ipairs(require("regression.health").check()) do
+    if item.level == "error" and item.text:match("lazy%.nvim is not loaded") then
+      found = item
+      break
+    end
+  end
+  truthy(found, "expected an adapter error about lazy.nvim")
+  vim.fn.delete(directory, "rf")
+end)
+
+test("health flags a missing baseline", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local found
+  for _, item in ipairs(require("regression.health").check()) do
+    if item.level == "warn" and item.text:match("no baseline yet") then
+      found = item
+      break
+    end
+  end
+  truthy(found, "expected a missing-baseline warning")
+  vim.fn.delete(directory, "rf")
+end)
+
+test("health flags an invalid baseline", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  vim.fn.mkdir(directory, "p")
+  vim.fn.writefile({ "not json" }, directory .. "/default.json")
+  local found
+  for _, item in ipairs(require("regression.health").check()) do
+    if item.level == "error" and item.text:match("baseline is invalid") then
+      found = item
+      break
+    end
+  end
+  truthy(found, "expected an invalid-baseline error")
+  vim.fn.delete(directory, "rf")
+end)
+
+test("health accepts a valid baseline", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  require("regression.store").save({ plugins = { alpha = {} }, captured_at = "2026-01-01T00:00:00Z" })
+  local found
+  for _, item in ipairs(require("regression.health").check()) do
+    if item.text:match("baseline") then
+      if item.level == "warn" or item.level == "error" then
+        error("unexpected baseline problem: " .. vim.inspect(item))
+      end
+      if item.level == "info" and item.text:match("baseline is valid") then
+        found = item
+      end
+    end
+  end
+  truthy(found, "expected a valid-baseline info line")
+  vim.fn.delete(directory, "rf")
+end)
+
+test("health run opens a scratch buffer", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  require("regression.health").run()
+  truthy(vim.api.nvim_buf_get_name(0):match("regression://report$"))
+  equal("regression.nvim health", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
+  vim.fn.delete(directory, "rf")
 end)
 
 for _, item in ipairs(tests) do

@@ -16,6 +16,12 @@ end, {
   desc = "Compare the current Neovim state with its baseline",
 })
 
+vim.api.nvim_create_user_command("NvimHealth", function()
+  require("regression").health()
+end, {
+  desc = "Check regression.nvim setup and adapter health",
+})
+
 vim.api.nvim_create_user_command("NvimBisect", function()
   require("regression").bisect()
 end, {
