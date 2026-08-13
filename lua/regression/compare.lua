@@ -33,6 +33,23 @@ function M.snapshots(baseline, current)
     )
   end
 
+  if type(baseline.config_files) == "table" and type(current.config_files) == "table" then
+    local names = {}
+    for name in pairs(baseline.config_files) do names[name] = true end
+    for name in pairs(current.config_files) do names[name] = true end
+    for _, name in ipairs(util.sorted_keys(names)) do
+      local old_hash = baseline.config_files[name]
+      local new_hash = current.config_files[name]
+      if not old_hash then
+        result.changes[#result.changes + 1] = "config added: " .. name
+      elseif not new_hash then
+        result.changes[#result.changes + 1] = "config removed: " .. name
+      elseif old_hash ~= new_hash then
+        result.changes[#result.changes + 1] = "config: " .. name .. " changed"
+      end
+    end
+  end
+
   if baseline.startup_ms and current.startup_ms then
     local delta = current.startup_ms - baseline.startup_ms
     local ratio = baseline.startup_ms > 0 and delta / baseline.startup_ms or 0
