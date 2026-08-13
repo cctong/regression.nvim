@@ -34,8 +34,12 @@ function M.regression()
   if not baseline then return end
   local current = require("regression.collector").collect()
   local result = require("regression.compare").snapshots(baseline, current)
+  require("regression.report").show(result)
+  local summary = result.has_regressions
+    and string.format("%d regression(s) detected", #result.regressions)
+    or "No regressions detected"
   local level = result.has_regressions and vim.log.levels.ERROR or vim.log.levels.INFO
-  require("regression.util").notify(require("regression.report").format(result), level)
+  require("regression.util").notify(summary, level)
   return result
 end
 

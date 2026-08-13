@@ -12,8 +12,8 @@ CONTENTS                                                    *regression-contents
 1. Introduction                                      *regression-introduction*
 
 regression.nvim records a known-good Neovim snapshot and compares the current
-state with it. Snapshots include startup time, errors, active LSP clients,
-health counts, and plugin revisions.
+state with it. Snapshots include Neovim version, adapter status, startup time,
+errors, active LSP clients, health counts, and plugin revisions.
 
 lazy.nvim is the only plugin-manager adapter in version 0.1.
 
@@ -50,8 +50,8 @@ The baseline is stored under stdpath("state")/regression.nvim by default.
 
                                                       *:NvimRegression*
 :NvimRegression
-        Capture the current state, compare it with the baseline, and display a
-        report.
+        Capture the current state, compare it with the baseline, and open the
+        report in a scratch split. Press |q| to close the report.
 
                                                           *:NvimBisect*
 :NvimBisect

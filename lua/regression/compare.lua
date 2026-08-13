@@ -18,6 +18,21 @@ function M.snapshots(baseline, current)
     plugin_changes = {},
   }
 
+  if current.adapter_error and current.adapter_error ~= baseline.adapter_error then
+    result.regressions[#result.regressions + 1] = {
+      kind = "adapter",
+      message = current.adapter_error,
+    }
+  end
+
+  if baseline.nvim_version and current.nvim_version and baseline.nvim_version ~= current.nvim_version then
+    result.changes[#result.changes + 1] = string.format(
+      "neovim: %s -> %s",
+      baseline.nvim_version,
+      current.nvim_version
+    )
+  end
+
   if baseline.startup_ms and current.startup_ms then
     local delta = current.startup_ms - baseline.startup_ms
     local ratio = baseline.startup_ms > 0 and delta / baseline.startup_ms or 0
