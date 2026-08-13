@@ -64,17 +64,32 @@ function M.snapshots(baseline, current)
 
   local old_health, new_health = baseline.health, current.health
   if old_health and new_health then
-    if (new_health.failures or 0) > (old_health.failures or 0) then
-      result.regressions[#result.regressions + 1] = {
-        kind = "health",
-        message = string.format("health errors increased from %d to %d", old_health.failures or 0, new_health.failures or 0),
-      }
-    end
-    if (new_health.warnings or 0) > (old_health.warnings or 0) then
-      result.regressions[#result.regressions + 1] = {
-        kind = "health",
-        message = string.format("health warnings increased from %d to %d", old_health.warnings or 0, new_health.warnings or 0),
-      }
+    if type(old_health.failure_messages) == "table" and type(new_health.failure_messages) == "table" then
+      local old_failures = array_set(old_health.failure_messages)
+      for _, message in ipairs(new_health.failure_messages) do
+        if not old_failures[message] then
+          result.regressions[#result.regressions + 1] = { kind = "health", message = message }
+        end
+      end
+      local old_warnings = array_set(old_health.warning_messages)
+      for _, message in ipairs(new_health.warning_messages or {}) do
+        if not old_warnings[message] then
+          result.regressions[#result.regressions + 1] = { kind = "health", message = message }
+        end
+      end
+    else
+      if (new_health.failures or 0) > (old_health.failures or 0) then
+        result.regressions[#result.regressions + 1] = {
+          kind = "health",
+          message = string.format("health errors increased from %d to %d", old_health.failures or 0, new_health.failures or 0),
+        }
+      end
+      if (new_health.warnings or 0) > (old_health.warnings or 0) then
+        result.regressions[#result.regressions + 1] = {
+          kind = "health",
+          message = string.format("health warnings increased from %d to %d", old_health.warnings or 0, new_health.warnings or 0),
+        }
+      end
     end
   end
 

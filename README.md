@@ -67,7 +67,7 @@ The report opens in a scratch split (`q` to close) and includes:
 - startup-time regressions;
 - new error messages;
 - missing or unhealthy LSP clients;
-- increased `:checkhealth` errors and warnings;
+- new `:checkhealth` errors and warnings;
 - added, removed, and changed plugin revisions.
 
 If the regression is reproducible and more than one lazy.nvim plugin changed:
@@ -175,7 +175,8 @@ dependencies.
   noisy; both an absolute and relative threshold must be crossed.
 - Error capture uses Neovim's message history and `v:errmsg`; failures that abort
   before this plugin loads are instead caught by bisect probe exit status.
-- Health reporting compares counts rather than individual health messages.
+- Health reporting compares individual `:checkhealth` messages when both
+  snapshots include them, and falls back to counts for older baselines.
 - LSP comparison reflects clients active when the command runs. Run the command
   after the relevant project buffers and clients have loaded.
 - Configuration changes are reported indirectly through behavior, but v0.1 only
