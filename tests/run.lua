@@ -227,6 +227,39 @@ test("lazy adapter lists commits between two revisions", function()
   vim.fn.delete(dir, "rf")
 end)
 
+test("pack adapter is unavailable without vim.pack", function()
+  local previous = rawget(vim, "pack")
+  rawset(vim, "pack", {})
+  equal(false, require("regression.adapters.pack").available())
+  rawset(vim, "pack", previous)
+end)
+
+test("pack adapter maps vim.pack plugins", function()
+  local dir = vim.fn.tempname()
+  vim.fn.mkdir(dir .. "/.git", "p")
+  local previous = rawget(vim, "pack")
+  rawset(vim, "pack", {
+    get = function()
+      return {
+        {
+          path = dir,
+          rev = "abc123def",
+          spec = { name = "example", src = "https://example.com/example.git" },
+        },
+      }
+    end,
+  })
+  local adapter = require("regression.adapters.pack")
+  truthy(adapter.available())
+  local plugins = adapter.plugins()
+  equal("example", plugins.example.name)
+  equal(vim.fs.normalize(dir), plugins.example.dir)
+  equal("https://example.com/example.git", plugins.example.url)
+  equal("abc123def", plugins.example.revision)
+  rawset(vim, "pack", previous)
+  vim.fn.delete(dir, "rf")
+end)
+
 for _, item in ipairs(tests) do
   local ok, err = xpcall(item.fn, debug.traceback)
   if ok then
