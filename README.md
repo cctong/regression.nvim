@@ -138,10 +138,13 @@ Before changing any checkout, bisection:
 2. verifies every baseline commit exists locally;
 3. verifies the all-current state is bad in a headless probe;
 4. verifies the all-baseline state is healthy;
-5. restores all current revisions on success or failure.
+5. removes temporary worktrees (and restores any in-place checkouts) on
+   success or failure.
 
-The command operates directly on plugin checkout directories. Do not run a
-plugin-manager update concurrently with a bisect.
+Bisection probes from temporary git worktrees so installed plugin checkouts
+stay at their current revisions. Plugins loaded from a custom `dir` outside
+`stdpath("data")` still use an in-place checkout. Do not run a plugin-manager
+update concurrently with a bisect.
 
 Headless probes reopen the current file and wait up to `settle_ms` for LSP
 clients to initialize. Increase this value if your language servers start
@@ -161,7 +164,8 @@ flowchart LR
 
 - `collector.lua` captures editor state without knowing the plugin manager.
 - `adapters/lazy.lua` and `adapters/pack.lua` own plugin discovery.
-- `git.lua` owns revision checkout operations shared by both adapters.
+- `git.lua` owns revision checkout and worktree operations shared by both adapters.
+- `shadow.lua` mirrors `stdpath("data")` so probes can load worktrees.
 - `compare.lua` is a side-effect-free snapshot comparison.
 - `bisect.lua` owns probe orchestration and guaranteed restoration.
 - `store.lua` persists versioned JSON snapshots atomically.
