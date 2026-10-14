@@ -18,6 +18,7 @@ M.defaults = {
   bisect = {
     timeout_ms = 60000,
     settle_ms = 1000,
+    -- optional test module; omit for automatic comparison
   },
 }
 

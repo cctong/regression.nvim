@@ -37,6 +37,8 @@ Call setup after the plugin manager has been configured: >lua
 <
 
 The baseline is stored under stdpath("state")/regression.nvim by default.
+Leave bisect.test unset for automatic comparison. See
+|regression-bisect-test|.
 
 ==============================================================================
 3. Commands                                              *regression-commands*
@@ -80,5 +82,56 @@ verifies baseline revisions, and removes the worktrees when it finishes.
 Bisection first searches the set of changed plugins, then the commits inside
 the likely culprit. It assumes a single primary culprit. Do not run plugin
 manager updates at the same time.
+
+                                                      *regression-bisect-test*
+bisect.test is an optional module name. Leave it unset for automatic snapshot
+comparison.
+
+Put the module under your config's lua/ directory. It returns a function.
+Each probe runs that function in the child after opening the current file and
+waiting for LSP clients. Return true when the revision is healthy. Extra
+returns after true are ignored. Return false, with an optional string reason,
+when the bug is reproduced.
+
+That function is the only predicate for the all-current check, the
+all-baseline check, the plugin search, and the commit search. Startup, error,
+LSP, and health comparisons are not used.
+
+A failed load (missing module or syntax error), a bad return, an exception, a
+child-process failure, or a timeout stops the bisect and does not name a
+culprit. vim.wait() may be used inside the function and must finish within
+timeout_ms.
+
+The example uses a scratch buffer and does not write a file: >lua
+
+  -- lua/regression_checks/formatting.lua
+  return function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+      "function example()",
+      "return true",
+      "end",
+    })
+    vim.api.nvim_buf_call(buf, function()
+      vim.bo.filetype = "lua"
+      vim.bo[buf].shiftwidth = 2
+      vim.bo[buf].expandtab = true
+      vim.cmd("silent normal! gg=G")
+    end)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    vim.api.nvim_buf_delete(buf, { force = true })
+    if lines[2] ~= "  return true" then
+      return false, "indent command did not indent the body"
+    end
+    return true
+  end
+<
+
+Point setup at that module: >lua
+
+  require("regression").setup({
+    bisect = { test = "regression_checks.formatting" },
+  })
+<
 
 vim:tw=78:ts=8:noet:ft=help:norl:

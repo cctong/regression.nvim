@@ -22,6 +22,14 @@ local function unlink(path)
   return nil, "refusing to delete " .. path
 end
 
+local function canonical_path(path)
+  local real = vim.uv.fs_realpath(path)
+  if not real or real == "" then
+    return vim.fs.normalize(path)
+  end
+  return vim.fs.normalize(real)
+end
+
 local function explode(path)
   local stat = vim.uv.fs_lstat(path)
   if not stat then
@@ -127,8 +135,7 @@ function M.use_live(shadow, plugin)
   if not dest then
     return true
   end
-  local real = vim.uv.fs_realpath(dest)
-  if real and vim.fs.normalize(real) == vim.fs.normalize(plugin.dir) and not shadow.worktrees[plugin.dir] then
+  if canonical_path(dest) == canonical_path(plugin.dir) and not shadow.worktrees[plugin.dir] then
     return true
   end
   if shadow.worktrees[plugin.dir] or (vim.uv.fs_lstat(dest .. "/.git") or {}).type == "file" then

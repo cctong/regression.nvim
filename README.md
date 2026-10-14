@@ -115,6 +115,7 @@ require("regression").setup({
   bisect = {
     timeout_ms = 60000,
     settle_ms = 1000,
+    -- test = "regression_checks.formatting",
   },
 })
 ```
@@ -155,6 +156,57 @@ update concurrently with a bisect.
 Headless probes reopen the current file and wait up to `settle_ms` for LSP
 clients to initialize. Increase this value if your language servers start
 slowly.
+
+### Custom reproduction check
+
+Set `bisect.test` to a module name to replace snapshot comparison for every
+probe. The module lives in your config, for example
+`stdpath("config")/lua/regression_checks/formatting.lua`, and returns a
+function. Omit the option for automatic comparison.
+
+The child runs the function after opening the current file and waiting for
+LSP clients. Return `true` when that revision is healthy. Extra return values
+after `true` are ignored. Return `false` and an optional string reason when
+the bug is reproduced. The same result is the predicate for the all-current
+check, the all-baseline check, the plugin search, and the commit search.
+Startup time, new errors, LSP clients, and health messages are not compared.
+
+A failed load (missing file or syntax error), a bad return, an exception, a
+probe crash, or a timeout stops the bisect and does not name a culprit. The
+function may call `vim.wait()`; the probe still has to finish within
+`timeout_ms`.
+
+This check formats a scratch buffer and does not write a file:
+
+```lua
+-- lua/regression_checks/formatting.lua
+return function()
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+    "function example()",
+    "return true",
+    "end",
+  })
+  vim.api.nvim_buf_call(buf, function()
+    vim.bo.filetype = "lua"
+    vim.bo[buf].shiftwidth = 2
+    vim.bo[buf].expandtab = true
+    vim.cmd("silent normal! gg=G")
+  end)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  vim.api.nvim_buf_delete(buf, { force = true })
+  if lines[2] ~= "  return true" then
+    return false, "indent command did not indent the body"
+  end
+  return true
+end
+```
+
+```lua
+require("regression").setup({
+  bisect = { test = "regression_checks.formatting" },
+})
+```
 
 ## Architecture
 

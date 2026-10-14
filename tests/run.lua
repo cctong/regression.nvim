@@ -36,6 +36,10 @@ require("regression").setup({
   health = { enabled = false },
 })
 
+local function write_lines(path, chunks)
+  vim.fn.writefile(vim.split(table.concat(chunks, "\n"), "\n", { plain = true }), path)
+end
+
 local function git_in(dir, args)
   local argv = {
     "git",
@@ -418,6 +422,35 @@ test("shadow checkout uses a worktree instead of the live plugin dir", function(
   vim.fn.delete(real_data, "rf")
 end)
 
+test("shadow use_live accepts a symlinked data alias before any revision", function()
+  local actual = vim.fn.tempname() .. "-actual"
+  local repo = actual .. "/lazy/alpha"
+  vim.fn.mkdir(repo, "p")
+  git_in(repo, { "init", "-q" })
+  vim.fn.writefile({ "keep" }, repo .. "/file.txt")
+  git_in(repo, { "add", "file.txt" })
+  git_in(repo, { "commit", "-q", "-m", "keep" })
+  local sha = git_in(repo, { "rev-parse", "HEAD" })
+  local link_dir = vim.fn.tempname() .. "-linkdir"
+  vim.fn.mkdir(link_dir, "p")
+  local alias = link_dir .. "/data"
+  truthy(vim.uv.fs_symlink(actual, alias))
+  local plugin_dir = vim.fs.normalize(alias) .. "/lazy/alpha"
+  local shadow_mod = require("regression.shadow")
+  local shadow = shadow_mod.create(alias)
+  local ok, err = shadow_mod.use_live(shadow, { dir = plugin_dir })
+  local readlink = vim.uv.fs_readlink(alias)
+  local head = require("regression.git").revision(repo)
+  local line = vim.fn.readfile(repo .. "/file.txt")[1]
+  shadow_mod.destroy(shadow)
+  vim.fn.delete(actual, "rf")
+  vim.fn.delete(link_dir, "rf")
+  truthy(ok, err)
+  equal(sha, head)
+  equal("keep", line)
+  equal(actual, readlink)
+end)
+
 test("pack adapter is unavailable without vim.pack", function()
   local previous = rawget(vim, "pack")
   rawset(vim, "pack", {})
@@ -606,6 +639,472 @@ test("regression and bisect stop before collecting with an invalid baseline", fu
     truthy(message:match("unsupported baseline schema version 2 %(supported: 1%)"))
   end
   vim.fn.delete(directory, "rf")
+end)
+
+local function worktree_paths(dir)
+  local paths = {}
+  for _, line in ipairs(vim.split(git_in(dir, { "worktree", "list", "--porcelain" }), "\n", { plain = true })) do
+    local path = line:match("^worktree%s+(.*)$")
+    if path then
+      paths[#paths + 1] = vim.fs.normalize(vim.fn.resolve(path))
+    end
+  end
+  return paths
+end
+
+local function assert_live_repo(dir, sha, relative, line)
+  equal(sha, require("regression.git").revision(dir))
+  equal(line, vim.fn.readfile(dir .. "/" .. relative)[1])
+  equal({ vim.fs.normalize(vim.fn.resolve(dir)) }, worktree_paths(dir))
+  local extra = dir .. "/.git/worktrees"
+  if vim.uv.fs_stat(extra) then
+    local handle = vim.uv.fs_scandir(extra)
+    local name = handle and vim.uv.fs_scandir_next(handle) or nil
+    equal(nil, name)
+  end
+end
+
+local function install_fake_adapter()
+  local git = require("regression.git")
+  package.loaded["regression.adapters.fake"] = {
+    name = "fake",
+    available = function() return true end,
+    is_dirty = git.is_dirty,
+    has_revision = git.has_revision,
+    checkout = git.checkout,
+    revisions_between = git.revisions_between,
+    commit_subject = git.commit_subject,
+  }
+end
+
+local function repo_with_states(dir, states)
+  vim.fn.mkdir(dir .. "/lua", "p")
+  git_in(dir, { "init", "-q" })
+  local shas = {}
+  for index, state in ipairs(states) do
+    vim.fn.writefile({
+      "return " .. string.format("%q", state),
+      "-- revision " .. index,
+    }, dir .. "/lua/marker.lua")
+    git_in(dir, { "add", "lua/marker.lua" })
+    git_in(dir, { "commit", "-q", "-m", "commit " .. index })
+    shas[index] = git_in(dir, { "rev-parse", "HEAD" })
+  end
+  return shas
+end
+
+-- Parent snapshots keep identical standard signals. The child init only exposes
+-- plugin checkouts that landed in the shadowed data directory.
+local function with_custom_bisect(opts, fn)
+  local id = vim.fn.fnamemodify(vim.fn.tempname(), ":t")
+  local data = vim.fs.normalize(vim.fn.stdpath("data"))
+  local culprit_name = "a-culprit-" .. id
+  local decoy_name = "z-decoy-" .. id
+  local culprit_dir = data .. "/lazy/" .. culprit_name
+  local decoy_dir = data .. "/lazy/" .. decoy_name
+  local config_home = vim.fn.tempname() .. "-config"
+  local sample = vim.fn.tempname() .. "-sample.lua"
+  local previous_config = vim.env.XDG_CONFIG_HOME
+  local previous_swap = vim.o.swapfile
+  local previous_buf = vim.api.nvim_get_current_buf()
+  local include_decoy = opts.decoy ~= false
+  local shas, decoy_shas
+  local shadow_mod = require("regression.shadow")
+  local real_create = shadow_mod.create
+  local homes = {}
+  shadow_mod.create = function(...)
+    local created = real_create(...)
+    homes[#homes + 1] = created.home
+    return created
+  end
+
+  local function remove_repo(dir)
+    if not vim.uv.fs_stat(dir) then
+      return
+    end
+    pcall(git_in, dir, { "worktree", "prune" })
+    vim.fn.delete(dir, "rf")
+  end
+
+  local function cleanup()
+    shadow_mod.create = real_create
+    vim.env.XDG_CONFIG_HOME = previous_config
+    vim.o.swapfile = previous_swap
+    package.loaded["regression.adapters.fake"] = nil
+    pcall(function()
+      if vim.api.nvim_buf_is_valid(previous_buf) then
+        vim.api.nvim_set_current_buf(previous_buf)
+      end
+      local sample_buf = vim.fn.bufnr(sample)
+      if sample_buf ~= -1 then
+        vim.cmd("bwipeout! " .. sample_buf)
+      end
+    end)
+    vim.fn.delete(config_home, "rf")
+    vim.fn.delete(sample)
+    remove_repo(culprit_dir)
+    if include_decoy then
+      remove_repo(decoy_dir)
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = false },
+    })
+  end
+
+  local ok, err = xpcall(function()
+    vim.fn.mkdir(data .. "/lazy", "p")
+    shas = repo_with_states(culprit_dir, opts.states)
+    if include_decoy then
+      vim.fn.mkdir(decoy_dir, "p")
+      git_in(decoy_dir, { "init", "-q" })
+      decoy_shas = {}
+      for index = 1, 2 do
+        vim.fn.writefile({ "v" .. index }, decoy_dir .. "/file.txt")
+        git_in(decoy_dir, { "add", "file.txt" })
+        git_in(decoy_dir, { "commit", "-q", "-m", "decoy " .. index })
+        decoy_shas[index] = git_in(decoy_dir, { "rev-parse", "HEAD" })
+      end
+    end
+    culprit_dir = vim.fs.normalize(culprit_dir)
+    decoy_dir = vim.fs.normalize(decoy_dir)
+
+    vim.fn.mkdir(config_home .. "/nvim/lua/regression_checks", "p")
+    vim.o.swapfile = false
+    vim.fn.writefile({ "return 'sample'" }, sample)
+    vim.cmd.edit(vim.fn.fnameescape(sample))
+    local opened = vim.api.nvim_buf_get_name(0)
+    local rtp_names = { culprit_name }
+    if include_decoy then
+      rtp_names[#rtp_names + 1] = decoy_name
+    end
+    local init = {
+      "vim.opt.swapfile = false",
+      "vim.opt.shortmess:append('A')",
+    }
+    if opts.init_prelude then
+      init[#init + 1] = opts.init_prelude
+    end
+    init[#init + 1] = "local names = " .. vim.inspect(rtp_names)
+    init[#init + 1] = [[
+local lazy = vim.fn.stdpath("data") .. "/lazy"
+for _, name in ipairs(names) do
+  local path = lazy .. "/" .. name
+  if vim.uv.fs_stat(path) then
+    vim.opt.runtimepath:prepend(path)
+  end
+end
+]]
+    write_lines(config_home .. "/nvim/init.lua", init)
+    write_lines(config_home .. "/nvim/lua/regression_checks/behavior.lua", { string.format([[
+return function()
+  if vim.api.nvim_buf_get_name(0) ~= %q then
+    return false, "probe did not open the file"
+  end
+  local state = require("marker")
+  if state == "throw" then
+    error("intermediate failure", 0)
+  end
+  if state == "bad" then
+    return false, "marker regressed"
+  end
+  return true
+end
+]], opened) })
+
+    install_fake_adapter()
+    vim.env.XDG_CONFIG_HOME = config_home
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = false },
+      bisect = {
+        test = "regression_checks.behavior",
+        timeout_ms = opts.timeout_ms or 60000,
+        settle_ms = 0,
+      },
+    })
+
+    local function plugin_spec(name, dir, revision)
+      return {
+        name = name,
+        dir = dir,
+        revision = revision,
+        head_ref = require("regression.git").head_ref(dir),
+      }
+    end
+    local function snapshot(plugins)
+      return valid_snapshot({
+        adapter = "fake",
+        startup_ms = 10,
+        errors = {},
+        lsp = {},
+        health = {
+          failures = 0,
+          warnings = 0,
+          command_ok = true,
+          failure_messages = {},
+          warning_messages = {},
+        },
+        config_files = { ["init.lua"] = "same" },
+        plugins = plugins,
+      })
+    end
+    local baseline_plugins = {
+      [culprit_name] = plugin_spec(culprit_name, culprit_dir, shas[1]),
+    }
+    local current_plugins = {
+      [culprit_name] = plugin_spec(culprit_name, culprit_dir, shas[#shas]),
+    }
+    if include_decoy then
+      baseline_plugins[decoy_name] = plugin_spec(decoy_name, decoy_dir, decoy_shas[1])
+      current_plugins[decoy_name] = plugin_spec(decoy_name, decoy_dir, decoy_shas[2])
+    end
+    local baseline = snapshot(baseline_plugins)
+    local current = snapshot(current_plugins)
+    local compared = require("regression.compare").snapshots(baseline, current)
+    equal(false, compared.has_regressions)
+    truthy(#compared.plugin_changes > 0)
+    fn({
+      shas = shas,
+      culprit_name = culprit_name,
+      culprit_dir = culprit_dir,
+      decoy_dir = decoy_dir,
+      decoy_shas = decoy_shas,
+      baseline = baseline,
+      current = current,
+    })
+    for _, home in ipairs(homes) do
+      truthy(vim.uv.fs_stat(home) == nil, "shadow home remains: " .. home)
+    end
+  end, debug.traceback)
+  cleanup()
+  if not ok then
+    error(err)
+  end
+end
+
+test("custom bisect finds the first bad commit and restores the live checkout", function()
+  with_custom_bisect({
+    states = { "healthy", "healthy", "bad", "bad", "bad" },
+  }, function(ctx)
+    local progress = {}
+    local culprit, err = require("regression.bisect").run(ctx.baseline, ctx.current, function(message)
+      progress[#progress + 1] = message
+    end)
+    if not culprit then
+      error(err)
+    end
+    equal(ctx.culprit_name, culprit.name)
+    equal(ctx.shas[1], culprit.old_revision)
+    equal(ctx.shas[5], culprit.new_revision)
+    equal(ctx.shas[3], culprit.first_bad_revision)
+    equal("commit 3", culprit.first_bad_subject)
+    truthy(vim.tbl_contains(progress, "Reproduced: marker regressed"))
+    assert_live_repo(ctx.culprit_dir, ctx.shas[5], "lua/marker.lua", 'return "bad"')
+    assert_live_repo(ctx.decoy_dir, ctx.decoy_shas[2], "file.txt", "v2")
+  end)
+end)
+
+test("custom bisect stops when an intermediate commit throws and restores the checkout", function()
+  with_custom_bisect({
+    states = { "healthy", "healthy", "throw", "bad", "bad" },
+  }, function(ctx)
+    local culprit, err = require("regression.bisect").run(ctx.baseline, ctx.current)
+    equal(nil, culprit)
+    truthy(type(err) == "string" and err:match("bisect test failed: intermediate failure$"), err)
+    assert_live_repo(ctx.culprit_dir, ctx.shas[5], "lua/marker.lua", 'return "bad"')
+    assert_live_repo(ctx.decoy_dir, ctx.decoy_shas[2], "file.txt", "v2")
+  end)
+end)
+
+local function probe_payload(test_name, module_lines)
+  local root = vim.fn.tempname()
+  local output = vim.fn.tempname()
+  local saved_rtp = vim.o.runtimepath
+  local env_keys = {
+    "REGRESSION_PROBE_OUTPUT",
+    "REGRESSION_PROBE_TEST",
+    "REGRESSION_PROBE_FILE",
+    "REGRESSION_PROBE_SETTLE_MS",
+    "REGRESSION_EXPECTED_LSP",
+  }
+  local saved = {}
+  for _, key in ipairs(env_keys) do
+    saved[key] = vim.env[key]
+  end
+  if module_lines then
+    local path = root .. "/lua/" .. test_name:gsub("%.", "/") .. ".lua"
+    vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+    write_lines(path, module_lines)
+    vim.opt.runtimepath:prepend(root)
+    package.loaded[test_name] = nil
+  end
+  vim.env.REGRESSION_PROBE_OUTPUT = output
+  vim.env.REGRESSION_PROBE_FILE = ""
+  vim.env.REGRESSION_PROBE_SETTLE_MS = "0"
+  vim.env.REGRESSION_EXPECTED_LSP = "[]"
+  vim.env.REGRESSION_PROBE_TEST = test_name or ""
+  local ok, err = xpcall(function()
+    require("regression.probe").run()
+  end, debug.traceback)
+  local raw
+  if ok then
+    local fd = io.open(output, "r")
+    raw = fd and fd:read("*a") or ""
+    if fd then
+      fd:close()
+    end
+  end
+  vim.o.runtimepath = saved_rtp
+  if test_name and test_name ~= "" then
+    package.loaded[test_name] = nil
+  end
+  for _, key in ipairs(env_keys) do
+    vim.env[key] = saved[key]
+  end
+  vim.fn.delete(root, "rf")
+  os.remove(output)
+  if not ok then
+    error(err)
+  end
+  return vim.json.decode(raw)
+end
+
+test("probe custom check verdicts and the default snapshot payload", function()
+  require("regression").setup({
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  equal({ status = "healthy" }, probe_payload("regression_checks.healthy", {
+    "return function() return true end",
+  }))
+  equal({ status = "healthy" }, probe_payload("regression_checks.true_extra", {
+    'return function() return true, "ignored" end',
+  }))
+  equal({ status = "reproduced" }, probe_payload("regression_checks.false_only", {
+    "return function() return false end",
+  }))
+  equal({ status = "reproduced", reason = "broke" }, probe_payload("regression_checks.broke", {
+    'return function() return false, "broke" end',
+  }))
+  local missing = probe_payload("regression_checks.missing_probe")
+  equal("error", missing.status)
+  truthy(missing.message:match("failed to load"), missing.message)
+  local bad_type = probe_payload("regression_checks.not_fn", { "return {}" })
+  equal("error", bad_type.status)
+  truthy(bad_type.message:match("must return a function"), bad_type.message)
+  local nil_return = probe_payload("regression_checks.nil_return", { "return function() end" })
+  equal("error", nil_return.status)
+  truthy(nil_return.message:match("must return true"), nil_return.message)
+  local bad_reason = probe_payload("regression_checks.bad_reason", {
+    "return function() return false, 1 end",
+  })
+  equal("error", bad_reason.status)
+  truthy(bad_reason.message:match("optional string reason"), bad_reason.message)
+  local thrown = probe_payload("regression_checks.throws", {
+    'return function() error("boom", 0) end',
+  })
+  equal("error", thrown.status)
+  truthy(thrown.message:match("bisect test failed: boom"), thrown.message)
+  local snapshot = probe_payload("")
+  equal(1, snapshot.schema_version)
+  equal(nil, snapshot.status)
+  truthy(snapshot.plugins)
+  truthy(snapshot.errors)
+end)
+
+test("custom bisect stops when the child exits nonzero", function()
+  with_custom_bisect({
+    states = { "healthy", "bad" },
+    decoy = false,
+    init_prelude = "os.exit(7)",
+  }, function(ctx)
+    local culprit, err = require("regression.bisect").run(ctx.baseline, ctx.current)
+    equal(nil, culprit)
+    truthy(type(err) == "string" and err:match("headless probe exited with code 7$"), err)
+    assert_live_repo(ctx.culprit_dir, ctx.shas[2], "lua/marker.lua", 'return "bad"')
+  end)
+end)
+
+test("custom bisect stops when the child times out", function()
+  with_custom_bisect({
+    states = { "healthy", "bad" },
+    decoy = false,
+    timeout_ms = 1000,
+    init_prelude = "vim.wait(30000, function() return false end)",
+  }, function(ctx)
+    local culprit, err = require("regression.bisect").run(ctx.baseline, ctx.current)
+    equal(nil, culprit)
+    truthy(type(err) == "string" and err:match("headless probe timed out$"), err)
+    assert_live_repo(ctx.culprit_dir, ctx.shas[2], "lua/marker.lua", 'return "bad"')
+  end)
+end)
+
+test("custom bisect ignores a written verdict when the probe stops", function()
+  local function assert_gate(code, payload, expected)
+    with_custom_bisect({
+      states = { "healthy", "bad" },
+      decoy = false,
+    }, function(ctx)
+      local util = require("regression.util")
+      local real = util.system
+      local calls = 0
+      util.system = function(argv, opts)
+        if argv[1] == vim.v.progpath then
+          calls = calls + 1
+          local fd = assert(io.open(opts.env.REGRESSION_PROBE_OUTPUT, "w"))
+          fd:write(vim.json.encode(payload))
+          fd:close()
+          return { code = code, stdout = "", stderr = "" }
+        end
+        return real(argv, opts)
+      end
+      local ok, err = xpcall(function()
+        local culprit, message = require("regression.bisect").run(ctx.baseline, ctx.current)
+        equal(nil, culprit)
+        truthy(type(message) == "string" and message:match(expected .. "$"), message)
+        equal(1, calls)
+        assert_live_repo(ctx.culprit_dir, ctx.shas[2], "lua/marker.lua", 'return "bad"')
+      end, debug.traceback)
+      util.system = real
+      if not ok then
+        error(err)
+      end
+    end)
+  end
+  assert_gate(124, { status = "healthy" }, "headless probe timed out")
+  assert_gate(9, { status = "reproduced", reason = "ignored" }, "headless probe exited with code 9")
+  with_custom_bisect({
+    states = { "healthy", "bad" },
+    decoy = false,
+  }, function(ctx)
+    local previous = vim.env.REGRESSION_PROBE_TEST
+    vim.env.REGRESSION_PROBE_TEST = "regression_checks.should_not_inherit"
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = false },
+      bisect = { timeout_ms = 60000, settle_ms = 0 },
+    })
+    local util = require("regression.util")
+    local real = util.system
+    local seen
+    util.system = function(argv, opts)
+      if argv[1] == vim.v.progpath then
+        seen = opts.env.REGRESSION_PROBE_TEST
+        return { code = 1, stdout = "", stderr = "stopped" }
+      end
+      return real(argv, opts)
+    end
+    local ok, err = xpcall(function()
+      equal(nil, require("regression.bisect").run(ctx.baseline, ctx.current))
+      equal("", seen)
+    end, debug.traceback)
+    util.system = real
+    vim.env.REGRESSION_PROBE_TEST = previous
+    if not ok then
+      error(err)
+    end
+  end)
 end)
 
 for _, item in ipairs(tests) do
