@@ -1107,6 +1107,740 @@ test("custom bisect ignores a written verdict when the probe stops", function()
   end)
 end)
 
+test("health parser accepts legacy and emoji report items", function()
+  local parsed = require("regression.collector").parse_health({
+    "==============================================================================",
+    "reviewfixture:                                                      1 ❌",
+    "- ERROR: old provider missing",
+    "- WARNING: legacy warning",
+    "- ❌ ERROR fixture failure",
+    "- ⚠️ WARNING fixture warning",
+    "- ERROR: same",
+    "- ERROR: same",
+    "- ✅ OK no ERROR found",
+    "- ✅ OK WARN variable is set",
+    "- WARNING check ERROR handler",
+    "  - ADVICE:",
+    "ERROR: No healthchecks found.",
+  })
+  equal(5, parsed.failures)
+  equal(3, parsed.warnings)
+  equal({
+    "- ERROR: old provider missing",
+    "- ERROR: same",
+    "- ❌ ERROR fixture failure",
+    "ERROR: No healthchecks found.",
+  }, parsed.failure_messages)
+  equal({
+    "- WARNING check ERROR handler",
+    "- WARNING: legacy warning",
+    "- ⚠️ WARNING fixture warning",
+  }, parsed.warning_messages)
+end)
+
+local function health_buffer_ids()
+  local ids = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):sub(-9) == "health://" then
+      ids[#ids + 1] = buf
+    end
+  end
+  return ids
+end
+
+local function restore_health_test(saved)
+  vim.api.nvim_exec2 = saved.exec2
+  vim.wait = saved.wait
+  vim.api.nvim_buf_get_lines = saved.get_lines
+  vim.api.nvim_buf_delete = saved.buf_delete
+  vim.api.nvim_set_current_buf = saved.set_buf
+  vim.o.runtimepath = saved.rtp
+  vim.g.health = saved.health
+  vim.o.eventignore = saved.eventignore
+  vim.o.swapfile = saved.swapfile
+  if saved.augroup then
+    pcall(vim.api.nvim_del_augroup_by_id, saved.augroup)
+  end
+  package.loaded["reviewfixture.health"] = nil
+  if saved.fixture then
+    vim.fn.delete(saved.fixture, "rf")
+  end
+  if saved.file then
+    pcall(function()
+      local bufnr = vim.fn.bufnr(saved.file)
+      if bufnr ~= -1 then
+        vim.cmd("bwipeout! " .. bufnr)
+      end
+    end)
+    vim.fn.delete(saved.file)
+  end
+  require("regression").setup({
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+end
+
+local function begin_health_test()
+  local saved = {
+    exec2 = vim.api.nvim_exec2,
+    wait = vim.wait,
+    get_lines = vim.api.nvim_buf_get_lines,
+    buf_delete = vim.api.nvim_buf_delete,
+    set_buf = vim.api.nvim_set_current_buf,
+    rtp = vim.o.runtimepath,
+    health = vim.g.health,
+    eventignore = vim.o.eventignore,
+    swapfile = vim.o.swapfile,
+    augroup = vim.api.nvim_create_augroup("regression_health_capture_test", { clear = true }),
+  }
+  return saved
+end
+
+local function open_sample(saved)
+  saved.file = vim.fn.tempname() .. "-health-sample.lua"
+  vim.o.swapfile = false
+  vim.fn.writefile({ "return 'sample'" }, saved.file)
+  vim.cmd.edit(vim.fn.fnameescape(saved.file))
+  return vim.api.nvim_get_current_buf()
+end
+
+local function install_fixture(saved)
+  saved.fixture = vim.fn.tempname() .. "-reviewfixture"
+  vim.fn.mkdir(saved.fixture .. "/lua/reviewfixture", "p")
+  vim.fn.writefile({
+    "local M = {}",
+    "function M.check()",
+    "  vim.health.start('reviewfixture')",
+    "  vim.health.error('fixture failure')",
+    "  vim.health.warn('fixture warning')",
+    "end",
+    "return M",
+  }, saved.fixture .. "/lua/reviewfixture/health.lua")
+  vim.opt.runtimepath:prepend(saved.fixture)
+end
+
+local function assert_contains(messages, text)
+  for _, message in ipairs(messages) do
+    if message:find(text, 1, true) then
+      return
+    end
+  end
+  error("missing health message: " .. text .. "\n" .. vim.inspect(messages))
+end
+
+test("checkhealth capture reads the report and restores the editor", function()
+  local saved = begin_health_test()
+  local ok, err = xpcall(function()
+    install_fixture(saved)
+    local sample = open_sample(saved)
+    local tab = vim.api.nvim_get_current_tabpage()
+    local win = vim.api.nvim_get_current_win()
+    local tabs = #vim.api.nvim_list_tabpages()
+    vim.api.nvim_create_autocmd("FileType", {
+      group = saved.augroup,
+      pattern = "checkhealth",
+      callback = function()
+        if vim.api.nvim_win_is_valid(win) then
+          vim.api.nvim_set_current_win(win)
+        end
+      end,
+    })
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local snapshot = require("regression.collector").collect()
+    assert_contains(snapshot.health.failure_messages, "fixture failure")
+    assert_contains(snapshot.health.warning_messages, "fixture warning")
+    equal(true, snapshot.health.command_ok)
+    equal(tab, vim.api.nvim_get_current_tabpage())
+    equal(win, vim.api.nvim_get_current_win())
+    equal(sample, vim.api.nvim_get_current_buf())
+    equal(tabs, #vim.api.nvim_list_tabpages())
+    equal({}, health_buffer_ids())
+    equal(vim.fn.resolve(saved.file), vim.fn.resolve(vim.api.nvim_buf_get_name(0)))
+  end, debug.traceback)
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("checkhealth capture preserves an existing report and float", function()
+  local saved = begin_health_test()
+  local float_win, report_buf, report_win
+  local ok, err = xpcall(function()
+    install_fixture(saved)
+    local sample = open_sample(saved)
+    local tab = vim.api.nvim_get_current_tabpage()
+    local win = vim.api.nvim_get_current_win()
+    report_buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(report_buf, 0, -1, false, { "- ERROR: keep me" })
+    vim.api.nvim_buf_set_name(report_buf, "health://")
+    vim.cmd("botright split")
+    report_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(report_win, report_buf)
+    vim.api.nvim_set_current_win(win)
+    local float_buf = vim.api.nvim_create_buf(false, true)
+    float_win = vim.api.nvim_open_win(float_buf, false, {
+      relative = "editor",
+      width = 8,
+      height = 2,
+      row = 1,
+      col = 1,
+    })
+    vim.b[sample].lsp_floating_preview = float_win
+    vim.g.health = { style = "float" }
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    require("regression.collector").collect()
+    equal(tab, vim.api.nvim_get_current_tabpage())
+    equal(win, vim.api.nvim_get_current_win())
+    equal(sample, vim.api.nvim_get_current_buf())
+    truthy(vim.api.nvim_buf_is_valid(report_buf))
+    truthy(vim.api.nvim_win_is_valid(report_win))
+    equal(report_buf, vim.api.nvim_win_get_buf(report_win))
+    equal("health://", vim.api.nvim_buf_get_name(report_buf))
+    equal({ "- ERROR: keep me" }, vim.api.nvim_buf_get_lines(report_buf, 0, -1, false))
+    truthy(vim.api.nvim_win_is_valid(float_win))
+    equal("float", vim.g.health.style)
+  end, debug.traceback)
+  if float_win and vim.api.nvim_win_is_valid(float_win) then
+    pcall(vim.api.nvim_win_close, float_win, true)
+  end
+  if report_win and vim.api.nvim_win_is_valid(report_win) then
+    pcall(vim.api.nvim_win_close, report_win, true)
+  end
+  if report_buf and vim.api.nvim_buf_is_valid(report_buf) then
+    pcall(vim.api.nvim_buf_delete, report_buf, { force = true })
+  end
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("synchronous checkhealth does not wait when the report stays modifiable", function()
+  local saved = begin_health_test()
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local waits = 0
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.bo[buf].modifiable = true
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: sync failure" })
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.bo[buf].filetype = "checkhealth"
+      vim.cmd("tab sbuffer " .. buf)
+      return { output = "Running healthchecks..." }
+    end
+    vim.wait = function(...)
+      waits = waits + 1
+      return saved.wait(...)
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local snapshot = require("regression.collector").collect()
+    equal(0, waits)
+    assert_contains(snapshot.health.failure_messages, "- ERROR: sync failure")
+    equal(sample, vim.api.nvim_get_current_buf())
+    equal({}, health_buffer_ids())
+  end, debug.traceback)
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("asynchronous checkhealth waits until the report is finished", function()
+  local saved = begin_health_test()
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then
+          return
+        end
+        vim.bo[buf].modifiable = true
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ❌ ERROR delayed failure" })
+        vim.bo[buf].modifiable = false
+        vim.bo[buf].filetype = "checkhealth"
+      end)
+      return { output = "checkhealth: checks done" }
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local snapshot = require("regression.collector").collect()
+    assert_contains(snapshot.health.failure_messages, "- ❌ ERROR delayed failure")
+    equal(sample, vim.api.nvim_get_current_buf())
+    equal({}, health_buffer_ids())
+  end, debug.traceback)
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("failed checkhealth capture restores a held report and raises", function()
+  local saved = begin_health_test()
+  local report_buf, report_win
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local tab = vim.api.nvim_get_current_tabpage()
+    local win = vim.api.nvim_get_current_win()
+    report_buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(report_buf, 0, -1, false, { "- WARNING: keep me" })
+    vim.api.nvim_buf_set_name(report_buf, "health://")
+    vim.cmd("botright split")
+    report_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(report_win, report_buf)
+    vim.api.nvim_set_current_win(win)
+
+    local function expect_error(setup_exec, pattern)
+      vim.api.nvim_exec2 = setup_exec
+      require("regression").setup({
+        startup = { enabled = false },
+        health = { enabled = true },
+      })
+      local called, capture_err = pcall(require("regression.collector").collect)
+      equal(false, called)
+      truthy(tostring(capture_err):find(pattern, 1, true), capture_err)
+      equal(tab, vim.api.nvim_get_current_tabpage())
+      equal(win, vim.api.nvim_get_current_win())
+      equal(sample, vim.api.nvim_get_current_buf())
+      truthy(vim.api.nvim_buf_is_valid(report_buf))
+      truthy(vim.api.nvim_win_is_valid(report_win))
+      equal("health://", vim.api.nvim_buf_get_name(report_buf))
+      equal({ "- WARNING: keep me" }, vim.api.nvim_buf_get_lines(report_buf, 0, -1, false))
+    end
+
+    expect_error(function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      error("health command exploded", 0)
+    end, "checkhealth command failed:")
+
+    vim.wait = function()
+      return false
+    end
+    expect_error(function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      return { output = "checkhealth: 100% checking vim.health\ncheckhealth: checks done" }
+    end, "checkhealth capture timed out")
+
+    expect_error(function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      vim.wait = function(_, predicate)
+        vim.api.nvim_buf_delete(buf, { force = true })
+        return predicate()
+      end
+      return { output = "" }
+    end, "checkhealth capture failed: report buffer was closed")
+
+    expect_error(function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: partial" })
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      error("health command exploded", 0)
+    end, "checkhealth command failed:")
+
+    vim.api.nvim_buf_get_lines = function(buf, ...)
+      if buf ~= report_buf and vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):sub(-9) == "health://" then
+        error("read failed", 0)
+      end
+      return saved.get_lines(buf, ...)
+    end
+    expect_error(function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: unread" })
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.bo[buf].filetype = "checkhealth"
+      vim.cmd("tab sbuffer " .. buf)
+      return { output = "" }
+    end, "checkhealth capture failed:")
+    vim.api.nvim_buf_get_lines = saved.get_lines
+
+    vim.wait = function()
+      return false, -2
+    end
+    expect_error(function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      return { output = "checkhealth: checks done" }
+    end, "checkhealth capture interrupted")
+
+    vim.api.nvim_buf_delete = function(buf, opts)
+      if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):sub(-9) == "health://" then
+        error("delete blocked", 0)
+      end
+      return saved.buf_delete(buf, opts)
+    end
+    local called, delete_err = pcall(function()
+      vim.api.nvim_exec2 = function(cmd, opts)
+        if cmd ~= "silent checkhealth" then
+          return saved.exec2(cmd, opts)
+        end
+        local buf = vim.api.nvim_create_buf(true, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: stuck" })
+        vim.api.nvim_buf_set_name(buf, "health://")
+        vim.bo[buf].filetype = "checkhealth"
+        vim.api.nvim_win_set_buf(win, buf)
+        return { output = "" }
+      end
+      require("regression.collector").collect()
+    end)
+    vim.api.nvim_buf_delete = saved.buf_delete
+    equal(false, called)
+    truthy(tostring(delete_err):find("could not delete report buffer", 1, true), delete_err)
+    truthy(vim.api.nvim_buf_is_valid(report_buf))
+    equal({ "- WARNING: keep me" }, vim.api.nvim_buf_get_lines(report_buf, 0, -1, false))
+    equal(sample, vim.api.nvim_get_current_buf())
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(buf) and buf ~= report_buf and vim.api.nvim_buf_get_name(buf):find("health://", 1, true) then
+        saved.buf_delete(buf, { force = true })
+      end
+    end
+  end, debug.traceback)
+  if report_win and vim.api.nvim_win_is_valid(report_win) then
+    pcall(vim.api.nvim_win_close, report_win, true)
+  end
+  if report_buf and vim.api.nvim_buf_is_valid(report_buf) then
+    pcall(vim.api.nvim_buf_delete, report_buf, { force = true })
+  end
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("checkhealth capture restores a buffer replaced in place", function()
+  local saved = begin_health_test()
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local win = vim.api.nvim_get_current_win()
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: replaced" })
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.bo[buf].filetype = "checkhealth"
+      vim.api.nvim_win_set_buf(win, buf)
+      return { output = "" }
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local snapshot = require("regression.collector").collect()
+    assert_contains(snapshot.health.failure_messages, "- ERROR: replaced")
+    equal(sample, vim.api.nvim_get_current_buf())
+    equal(win, vim.api.nvim_get_current_win())
+    equal({}, health_buffer_ids())
+  end, debug.traceback)
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("checkhealth capture keeps an existing preview across asynchronous completion", function()
+  local saved = begin_health_test()
+  local float_win, float_buf
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local win = vim.api.nvim_get_current_win()
+    float_buf, float_win = vim.lsp.util.open_floating_preview({ "- ERROR: keep me" }, "", {
+      height = 2,
+      width = 24,
+      relative = "editor",
+      row = 1,
+      col = 1,
+      focus = false,
+    })
+    vim.api.nvim_set_current_win(win)
+    vim.bo[float_buf].modifiable = true
+    vim.api.nvim_buf_set_name(float_buf, "health://")
+    vim.bo[float_buf].modifiable = false
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(buf) then
+          return
+        end
+        vim.bo[buf].modifiable = true
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ❌ ERROR delayed failure" })
+        vim.bo[buf].filetype = "checkhealth"
+      end)
+      return { output = "checkhealth: checks done" }
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local snapshot = require("regression.collector").collect()
+    vim.wait(50, function()
+      return false
+    end)
+    assert_contains(snapshot.health.failure_messages, "- ❌ ERROR delayed failure")
+    equal(sample, vim.api.nvim_get_current_buf())
+    equal(win, vim.api.nvim_get_current_win())
+    equal(saved.eventignore, vim.o.eventignore)
+    truthy(vim.api.nvim_win_is_valid(float_win))
+    truthy(vim.api.nvim_buf_is_valid(float_buf))
+    equal(float_buf, vim.api.nvim_win_get_buf(float_win))
+    equal("health://", vim.api.nvim_buf_get_name(float_buf))
+    equal({ "- ERROR: keep me" }, vim.api.nvim_buf_get_lines(float_buf, 0, -1, false))
+  end, debug.traceback)
+  if float_win and vim.api.nvim_win_is_valid(float_win) then
+    pcall(vim.api.nvim_win_close, float_win, true)
+  end
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("checkhealth capture leaves unrelated tabs open", function()
+  local saved = begin_health_test()
+  local extra_tab
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local tabs = vim.api.nvim_list_tabpages()
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.cmd("tab sbuffer " .. buf)
+      vim.schedule(function()
+        vim.cmd.tabnew()
+        extra_tab = vim.api.nvim_get_current_tabpage()
+        if vim.api.nvim_buf_is_valid(buf) then
+          vim.bo[buf].filetype = "checkhealth"
+        end
+      end)
+      return { output = "" }
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    require("regression.collector").collect()
+    equal(sample, vim.api.nvim_get_current_buf())
+    truthy(extra_tab and vim.api.nvim_tabpage_is_valid(extra_tab), "provider tab was closed")
+    truthy(not vim.tbl_contains(tabs, extra_tab))
+  end, debug.traceback)
+  if extra_tab and vim.api.nvim_tabpage_is_valid(extra_tab) and #vim.api.nvim_list_tabpages() > 1 then
+    pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(extra_tab))
+  end
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("checkhealth capture removes an unnamed report when naming fails", function()
+  local saved = begin_health_test()
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local tab = vim.api.nvim_get_current_tabpage()
+    local win = vim.api.nvim_get_current_win()
+    local tabs = #vim.api.nvim_list_tabpages()
+    local before = {}
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      before[buf] = true
+    end
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.cmd("tab sbuffer " .. buf)
+      error("bufenter exploded", 0)
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local called, capture_err = pcall(require("regression.collector").collect)
+    equal(false, called)
+    truthy(tostring(capture_err):find("bufenter exploded", 1, true), capture_err)
+    equal(tab, vim.api.nvim_get_current_tabpage())
+    equal(win, vim.api.nvim_get_current_win())
+    equal(sample, vim.api.nvim_get_current_buf())
+    equal(tabs, #vim.api.nvim_list_tabpages())
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(buf) and not before[buf] then
+        error("leftover capture buffer " .. buf .. " name=" .. vim.api.nvim_buf_get_name(buf))
+      end
+    end
+  end, debug.traceback)
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("failed buffer restoration fails the capture", function()
+  local saved = begin_health_test()
+  local ok, err = xpcall(function()
+    local sample = open_sample(saved)
+    local win = vim.api.nvim_get_current_win()
+    vim.api.nvim_exec2 = function(cmd, opts)
+      if cmd ~= "silent checkhealth" then
+        return saved.exec2(cmd, opts)
+      end
+      local buf = vim.api.nvim_create_buf(true, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: replaced" })
+      vim.api.nvim_buf_set_name(buf, "health://")
+      vim.bo[buf].filetype = "checkhealth"
+      vim.api.nvim_win_set_buf(win, buf)
+      return { output = "" }
+    end
+    vim.api.nvim_buf_delete = function(buf, opts)
+      if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):sub(-9) == "health://" then
+        return
+      end
+      return saved.buf_delete(buf, opts)
+    end
+    vim.api.nvim_set_current_buf = function(buf)
+      if buf == sample then
+        error("restore blocked", 0)
+      end
+      return saved.set_buf(buf)
+    end
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+    })
+    local called, capture_err = pcall(require("regression.collector").collect)
+    equal(false, called)
+    truthy(tostring(capture_err):find("could not restore buffer", 1, true), capture_err)
+    truthy(vim.api.nvim_get_current_buf() ~= sample)
+  end, debug.traceback)
+  vim.api.nvim_buf_delete = saved.buf_delete
+  vim.api.nvim_set_current_buf = saved.set_buf
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):find("health", 1, true) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+  end
+  restore_health_test(saved)
+  if not ok then
+    error(err)
+  end
+end)
+
+test("checkhealth capture restores a fresh empty buffer", function()
+  local script = vim.fn.tempname() .. "-empty-health.lua"
+  vim.fn.writefile({
+    "vim.opt.swapfile = false",
+    "require('regression').setup({ startup = { enabled = false }, health = { enabled = true } })",
+    "local buf = vim.api.nvim_get_current_buf()",
+    "local win = vim.api.nvim_get_current_win()",
+    "local tab = vim.api.nvim_get_current_tabpage()",
+    "assert(vim.fn.bufnr('$') == 1, 'not a fresh buffer')",
+    "assert(vim.fn.line('$') == 1 and vim.fn.getline(1) == '', 'not empty')",
+    "local snapshot = require('regression.collector').collect()",
+    "assert(type(snapshot.health) == 'table', 'missing health')",
+    "assert(vim.api.nvim_get_current_buf() == buf, 'buffer changed')",
+    "assert(vim.api.nvim_get_current_win() == win, 'window changed')",
+    "assert(vim.api.nvim_get_current_tabpage() == tab, 'tab changed')",
+    "assert(vim.api.nvim_buf_get_name(buf) == '', 'buffer name changed')",
+    "for _, item in ipairs(vim.api.nvim_list_bufs()) do",
+    "  if vim.api.nvim_buf_is_valid(item) and vim.api.nvim_buf_get_name(item):sub(-9) == 'health://' then",
+    "    error('health buffer remains')",
+    "  end",
+    "end",
+    "print('empty-buffer-ok')",
+  }, script)
+  local result = require("regression.util").system({
+    vim.v.progpath,
+    "--headless",
+    "-i",
+    "NONE",
+    "-u",
+    "tests/minimal_init.lua",
+    "-l",
+    script,
+  }, { cwd = vim.fn.getcwd() })
+  vim.fn.delete(script)
+  local output = tostring(result.stdout) .. tostring(result.stderr)
+  if result.code ~= 0 or not output:find("empty-buffer-ok", 1, true) then
+    error("empty buffer capture failed\n" .. output)
+  end
+end)
+
+test("health capture keeps the bisect probe on the original file", function()
+  with_custom_bisect({
+    states = { "healthy", "bad" },
+    decoy = false,
+  }, function(ctx)
+    require("regression").setup({
+      startup = { enabled = false },
+      health = { enabled = true },
+      bisect = {
+        test = "regression_checks.behavior",
+        timeout_ms = 60000,
+        settle_ms = 0,
+      },
+    })
+    require("regression.collector").collect()
+    local culprit, err = require("regression.bisect").run(ctx.baseline, ctx.current)
+    if not culprit then
+      error(err)
+    end
+    equal(ctx.culprit_name, culprit.name)
+    equal(ctx.shas[2], culprit.new_revision)
+    equal(ctx.shas[2], culprit.first_bad_revision)
+  end)
+end)
+
 for _, item in ipairs(tests) do
   local ok, err = xpcall(item.fn, debug.traceback)
   if ok then

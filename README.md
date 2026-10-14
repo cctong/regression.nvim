@@ -248,6 +248,9 @@ dependencies.
   before this plugin loads are instead caught by bisect probe exit status.
 - Health reporting compares individual `:checkhealth` messages when both
   snapshots include them, and falls back to counts for older baselines.
+  Baselines captured before report-buffer capture can have empty health lists
+  on Neovim versions whose `:checkhealth` prints progress outside the report.
+  Replace those baselines with `:NvimBaseline!`.
 - LSP comparison reflects clients active when the command runs. Run the command
   after the relevant project buffers and clients have loaded.
 - Configuration file changes are reported, but bisection still only searches
