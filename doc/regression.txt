@@ -59,7 +59,7 @@ Leave bisect.test unset for automatic comparison. See
 
                                                           *:NvimHealth*
 :NvimHealth
-        Check the regression.nvim setup: Neovim version, adapter
+        Check the regression.nvim setup: Neovim version, Git, adapter
         availability, storage directory, and baseline validity. Opens the
         results in a scratch split.
         The same checks run under |:checkhealth| as `:checkhealth regression`.

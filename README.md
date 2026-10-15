@@ -77,7 +77,7 @@ The report opens in a scratch split (`q` to close) and includes:
 - added, removed, and changed plugin revisions;
 - added, removed, and changed Neovim config files.
 
-- `:NvimHealth` — check the regression.nvim setup: adapter availability, storage directory, and baseline validity. The same checks run through `:checkhealth regression`.
+- `:NvimHealth` — check the regression.nvim setup: Git, adapter availability, storage directory, and baseline validity. The same checks run through `:checkhealth regression`.
 
 If the regression is reproducible and more than one plugin changed:
 

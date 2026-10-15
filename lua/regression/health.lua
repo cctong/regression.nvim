@@ -20,6 +20,19 @@ local function neovim_check()
   }
 end
 
+local function git_check()
+  if vim.fn.executable("git") == 1 then
+    return {
+      level = "ok",
+      text = "git is available",
+    }
+  end
+  return {
+    level = "error",
+    text = "git is not executable; regression.nvim needs Git to read plugin revisions and bisect",
+  }
+end
+
 local function adapter_check()
   local adapter, err = adapters.get()
   if not adapter then
@@ -89,6 +102,7 @@ end
 function M.results()
   return {
     neovim_check(),
+    git_check(),
     adapter_check(),
     storage_check(),
     baseline_check(),

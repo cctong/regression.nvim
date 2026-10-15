@@ -590,6 +590,59 @@ test("health accepts a valid baseline", function()
   vim.fn.delete(directory, "rf")
 end)
 
+test("health reports git availability", function()
+  local directory = vim.fn.tempname()
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+  local found
+  for _, item in ipairs(require("regression.health").results()) do
+    if item.text:match("^git ") then
+      found = item
+      break
+    end
+  end
+  vim.fn.delete(directory, "rf")
+  truthy(found, "expected a git health item")
+  equal("ok", found.level)
+end)
+
+test("health flags a missing git", function()
+  local directory = vim.fn.tempname()
+  local empty_path = directory .. "/empty-path"
+  vim.fn.mkdir(empty_path, "p")
+  require("regression").setup({
+    storage_dir = directory,
+    startup = { enabled = false },
+    health = { enabled = false },
+  })
+
+  local saved_path = vim.env.PATH
+  local ok, result = xpcall(function()
+    vim.env.PATH = empty_path
+    return require("regression.health").results()
+  end, debug.traceback)
+
+  vim.env.PATH = saved_path
+  vim.fn.delete(directory, "rf")
+  if not ok then
+    error(result)
+  end
+
+  local found
+  for _, item in ipairs(result) do
+    if item.text:match("^git ") then
+      found = item
+      break
+    end
+  end
+  truthy(found, "expected a git health item")
+  equal("error", found.level)
+  truthy(found.text:match("git is not executable"))
+end)
+
 test("health check reports through vim.health", function()
   local calls = {}
   local saved_start = vim.health.start
@@ -620,7 +673,7 @@ test("health check reports through vim.health", function()
       health = { enabled = false },
     })
     require("regression.health").check()
-    equal(5, #calls)
+    equal(6, #calls)
     local starts = 0
     for _, item in ipairs(calls) do
       if item.level == "start" then
@@ -632,19 +685,21 @@ test("health check reports through vim.health", function()
     equal("regression.nvim", calls[1].text)
     equal("ok", calls[2].level)
     truthy(calls[2].text:match("is supported"))
-    equal("error", calls[3].level)
-    truthy(calls[3].text:match("lazy%.nvim is not loaded"))
-    equal("ok", calls[4].level)
-    truthy(calls[4].text:match("is writable"))
-    equal("warn", calls[5].level)
-    equal("no baseline yet; run :NvimBaseline", calls[5].text)
+    equal("ok", calls[3].level)
+    truthy(calls[3].text:match("^git "))
+    equal("error", calls[4].level)
+    truthy(calls[4].text:match("lazy%.nvim is not loaded"))
+    equal("ok", calls[5].level)
+    truthy(calls[5].text:match("is writable"))
+    equal("warn", calls[6].level)
+    equal("no baseline yet; run :NvimBaseline", calls[6].text)
 
     assert(require("regression.store").save(valid_snapshot()))
     for i = 1, #calls do
       calls[i] = nil
     end
     require("regression.health").check()
-    equal(5, #calls)
+    equal(6, #calls)
     starts = 0
     for _, item in ipairs(calls) do
       if item.level == "start" then
@@ -656,12 +711,14 @@ test("health check reports through vim.health", function()
     equal("regression.nvim", calls[1].text)
     equal("ok", calls[2].level)
     truthy(calls[2].text:match("is supported"))
-    equal("error", calls[3].level)
-    truthy(calls[3].text:match("lazy%.nvim is not loaded"))
-    equal("ok", calls[4].level)
-    truthy(calls[4].text:match("is writable"))
-    equal("info", calls[5].level)
-    truthy(calls[5].text:match("baseline is valid"))
+    equal("ok", calls[3].level)
+    truthy(calls[3].text:match("^git "))
+    equal("error", calls[4].level)
+    truthy(calls[4].text:match("lazy%.nvim is not loaded"))
+    equal("ok", calls[5].level)
+    truthy(calls[5].text:match("is writable"))
+    equal("info", calls[6].level)
+    truthy(calls[6].text:match("baseline is valid"))
   end, debug.traceback)
 
   vim.health.start = saved_start
