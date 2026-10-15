@@ -86,7 +86,7 @@ local function baseline_check()
   }
 end
 
-function M.check()
+function M.results()
   return {
     neovim_check(),
     adapter_check(),
@@ -95,8 +95,15 @@ function M.check()
   }
 end
 
+function M.check()
+  vim.health.start("regression.nvim")
+  for _, item in ipairs(M.results()) do
+    vim.health[item.level](item.text)
+  end
+end
+
 function M.run()
-  local checks = M.check()
+  local checks = M.results()
   local lines = { "regression.nvim health" }
   local problems = 0
   local errors = 0

@@ -62,6 +62,7 @@ Leave bisect.test unset for automatic comparison. See
         Check the regression.nvim setup: Neovim version, adapter
         availability, storage directory, and baseline validity. Opens the
         results in a scratch split.
+        The same checks run under |:checkhealth| as `:checkhealth regression`.
 
         If |:NvimHealth| reports an invalid or unsupported baseline, update
         regression.nvim or use |:NvimBaseline!| to replace it.

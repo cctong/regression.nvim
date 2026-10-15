@@ -492,7 +492,7 @@ test("health reports adapter problems", function()
     health = { enabled = false },
   })
   local found
-  for _, item in ipairs(require("regression.health").check()) do
+  for _, item in ipairs(require("regression.health").results()) do
     if item.level == "error" and item.text:match("lazy%.nvim is not loaded") then
       found = item
       break
@@ -510,7 +510,7 @@ test("health flags a missing baseline", function()
     health = { enabled = false },
   })
   local found
-  for _, item in ipairs(require("regression.health").check()) do
+  for _, item in ipairs(require("regression.health").results()) do
     if item.level == "warn" and item.text:match("no baseline yet") then
       found = item
       break
@@ -530,7 +530,7 @@ test("health flags an invalid baseline", function()
   vim.fn.mkdir(directory, "p")
   vim.fn.writefile({ "not json" }, directory .. "/default.json")
   local found
-  for _, item in ipairs(require("regression.health").check()) do
+  for _, item in ipairs(require("regression.health").results()) do
     if item.level == "error"
       and item.text:match("^baseline is invalid: invalid JSON:")
       and item.text:match("; update regression%.nvim or use :NvimBaseline! to replace it$")
@@ -553,7 +553,7 @@ test("health flags an unsupported baseline schema", function()
   vim.fn.mkdir(directory, "p")
   vim.fn.writefile({ vim.json.encode(valid_snapshot({ schema_version = 2 })) }, directory .. "/default.json")
   local baseline_items = {}
-  for _, item in ipairs(require("regression.health").check()) do
+  for _, item in ipairs(require("regression.health").results()) do
     if item.text:match("baseline") then
       baseline_items[#baseline_items + 1] = item
     end
@@ -576,7 +576,7 @@ test("health accepts a valid baseline", function()
   })
   assert(require("regression.store").save(valid_snapshot({ plugins = { alpha = {} } })))
   local found
-  for _, item in ipairs(require("regression.health").check()) do
+  for _, item in ipairs(require("regression.health").results()) do
     if item.text:match("baseline") then
       if item.level == "warn" or item.level == "error" then
         error("unexpected baseline problem: " .. vim.inspect(item))
@@ -588,6 +588,94 @@ test("health accepts a valid baseline", function()
   end
   truthy(found, "expected a valid-baseline info line")
   vim.fn.delete(directory, "rf")
+end)
+
+test("health check reports through vim.health", function()
+  local calls = {}
+  local saved_start = vim.health.start
+  local saved_ok = vim.health.ok
+  local saved_info = vim.health.info
+  local saved_warn = vim.health.warn
+  local saved_error = vim.health.error
+  local saved_options = vim.deepcopy(require("regression.config").options)
+  local function record(level)
+    return function(text)
+      calls[#calls + 1] = { level = level, text = text }
+    end
+  end
+  vim.health.start = record("start")
+  vim.health.ok = record("ok")
+  vim.health.info = record("info")
+  vim.health.warn = record("warn")
+  vim.health.error = record("error")
+
+  local directory
+  local ok, failure = xpcall(function()
+    directory = vim.fn.tempname()
+    vim.fn.mkdir(directory, "p")
+    require("regression").setup({
+      adapter = "lazy",
+      storage_dir = directory,
+      startup = { enabled = false },
+      health = { enabled = false },
+    })
+    require("regression.health").check()
+    equal(5, #calls)
+    local starts = 0
+    for _, item in ipairs(calls) do
+      if item.level == "start" then
+        starts = starts + 1
+      end
+    end
+    equal(1, starts)
+    equal("start", calls[1].level)
+    equal("regression.nvim", calls[1].text)
+    equal("ok", calls[2].level)
+    truthy(calls[2].text:match("is supported"))
+    equal("error", calls[3].level)
+    truthy(calls[3].text:match("lazy%.nvim is not loaded"))
+    equal("ok", calls[4].level)
+    truthy(calls[4].text:match("is writable"))
+    equal("warn", calls[5].level)
+    equal("no baseline yet; run :NvimBaseline", calls[5].text)
+
+    assert(require("regression.store").save(valid_snapshot()))
+    for i = 1, #calls do
+      calls[i] = nil
+    end
+    require("regression.health").check()
+    equal(5, #calls)
+    starts = 0
+    for _, item in ipairs(calls) do
+      if item.level == "start" then
+        starts = starts + 1
+      end
+    end
+    equal(1, starts)
+    equal("start", calls[1].level)
+    equal("regression.nvim", calls[1].text)
+    equal("ok", calls[2].level)
+    truthy(calls[2].text:match("is supported"))
+    equal("error", calls[3].level)
+    truthy(calls[3].text:match("lazy%.nvim is not loaded"))
+    equal("ok", calls[4].level)
+    truthy(calls[4].text:match("is writable"))
+    equal("info", calls[5].level)
+    truthy(calls[5].text:match("baseline is valid"))
+  end, debug.traceback)
+
+  vim.health.start = saved_start
+  vim.health.ok = saved_ok
+  vim.health.info = saved_info
+  vim.health.warn = saved_warn
+  vim.health.error = saved_error
+  require("regression.config").options = saved_options
+  if directory then
+    vim.fn.delete(directory, "rf")
+  end
+  if not ok then
+    error(failure)
+  end
 end)
 
 test("health run opens a scratch buffer", function()
@@ -1230,6 +1318,7 @@ end
 
 test("checkhealth capture reads the report and restores the editor", function()
   local saved = begin_health_test()
+  local directory = vim.fn.tempname()
   local ok, err = xpcall(function()
     install_fixture(saved)
     local sample = open_sample(saved)
@@ -1246,13 +1335,19 @@ test("checkhealth capture reads the report and restores the editor", function()
       end,
     })
     require("regression").setup({
+      storage_dir = directory,
       startup = { enabled = false },
       health = { enabled = true },
     })
     local snapshot = require("regression.collector").collect()
+    equal(true, snapshot.health.command_ok)
+    assert_contains(snapshot.health.failure_messages, 'adapter "lazy" is unavailable: lazy.nvim is not loaded')
+    assert_contains(snapshot.health.warning_messages, "no baseline yet; run :NvimBaseline")
+    for _, message in ipairs(snapshot.health.failure_messages) do
+      equal(nil, message:find('healthcheck report for "regression" plugin is empty', 1, true))
+    end
     assert_contains(snapshot.health.failure_messages, "fixture failure")
     assert_contains(snapshot.health.warning_messages, "fixture warning")
-    equal(true, snapshot.health.command_ok)
     equal(tab, vim.api.nvim_get_current_tabpage())
     equal(win, vim.api.nvim_get_current_win())
     equal(sample, vim.api.nvim_get_current_buf())
@@ -1261,6 +1356,7 @@ test("checkhealth capture reads the report and restores the editor", function()
     equal(vim.fn.resolve(saved.file), vim.fn.resolve(vim.api.nvim_buf_get_name(0)))
   end, debug.traceback)
   restore_health_test(saved)
+  vim.fn.delete(directory, "rf")
   if not ok then
     error(err)
   end
