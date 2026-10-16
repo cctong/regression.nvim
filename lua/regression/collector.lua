@@ -300,6 +300,19 @@ local function health()
       end
     end,
   })
+  -- Neovim 0.10 appends the report to whatever buffer is current when FileType fires.
+  vim.api.nvim_create_autocmd("FileType", {
+    group = owned_group,
+    pattern = "checkhealth",
+    callback = function(ev)
+      for _, health_win in ipairs(vim.fn.win_findbuf(ev.buf)) do
+        if vim.api.nvim_win_is_valid(health_win) and vim.api.nvim_get_current_win() ~= health_win then
+          vim.api.nvim_set_current_win(health_win)
+          return
+        end
+      end
+    end,
+  })
 
   local function restore_eventignore()
     if eventignore_set then
@@ -340,8 +353,9 @@ local function health()
     local override = type(saved_health) == "table" and vim.deepcopy(saved_health) or {}
     override.style = nil
     -- Floating reports, and the BufLeave from a report tab, close existing previews.
+    -- Neovim 0.10 closes vim.lsp previews on BufEnter.
     vim.g.health = override
-    vim.opt.eventignore:append({ "BufLeave", "WinLeave", "CursorMoved", "CursorMovedI", "InsertCharPre" })
+    vim.opt.eventignore:append({ "BufEnter", "BufLeave", "WinLeave", "CursorMoved", "CursorMovedI", "InsertCharPre" })
     eventignore_set = true
     local exec_ok, output = pcall(vim.api.nvim_exec2, "silent checkhealth", { output = true })
     command_ok = exec_ok

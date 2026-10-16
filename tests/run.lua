@@ -1482,7 +1482,7 @@ test("synchronous checkhealth does not wait when the report stays modifiable", f
     local waits = 0
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.bo[buf].modifiable = true
@@ -1518,7 +1518,7 @@ test("asynchronous checkhealth waits until the report is finished", function()
     local sample = open_sample(saved)
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_name(buf, "health://")
@@ -1584,7 +1584,7 @@ test("failed checkhealth capture restores a held report and raises", function()
 
     expect_error(function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       error("health command exploded", 0)
     end, "checkhealth command failed:")
@@ -1594,7 +1594,7 @@ test("failed checkhealth capture restores a held report and raises", function()
     end
     expect_error(function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_name(buf, "health://")
@@ -1604,7 +1604,7 @@ test("failed checkhealth capture restores a held report and raises", function()
 
     expect_error(function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_name(buf, "health://")
@@ -1618,7 +1618,7 @@ test("failed checkhealth capture restores a held report and raises", function()
 
     expect_error(function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: partial" })
@@ -1635,7 +1635,7 @@ test("failed checkhealth capture restores a held report and raises", function()
     end
     expect_error(function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: unread" })
@@ -1651,7 +1651,7 @@ test("failed checkhealth capture restores a held report and raises", function()
     end
     expect_error(function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_name(buf, "health://")
@@ -1668,7 +1668,7 @@ test("failed checkhealth capture restores a held report and raises", function()
     local called, delete_err = pcall(function()
       vim.api.nvim_exec2 = function(cmd, opts)
         if cmd ~= "silent checkhealth" then
-          return saved.exec2(cmd, opts)
+          return saved.exec2(cmd, opts or {})
         end
         local buf = vim.api.nvim_create_buf(true, true)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: stuck" })
@@ -1710,7 +1710,7 @@ test("checkhealth capture restores a buffer replaced in place", function()
     local win = vim.api.nvim_get_current_win()
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: replaced" })
@@ -1755,7 +1755,7 @@ test("checkhealth capture keeps an existing preview across asynchronous completi
     vim.bo[float_buf].modifiable = false
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_name(buf, "health://")
@@ -1805,7 +1805,7 @@ test("checkhealth capture leaves unrelated tabs open", function()
     local tabs = vim.api.nvim_list_tabpages()
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_name(buf, "health://")
@@ -1850,7 +1850,7 @@ test("checkhealth capture removes an unnamed report when naming fails", function
     end
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.cmd("tab sbuffer " .. buf)
@@ -1886,7 +1886,7 @@ test("failed buffer restoration fails the capture", function()
     local win = vim.api.nvim_get_current_win()
     vim.api.nvim_exec2 = function(cmd, opts)
       if cmd ~= "silent checkhealth" then
-        return saved.exec2(cmd, opts)
+        return saved.exec2(cmd, opts or {})
       end
       local buf = vim.api.nvim_create_buf(true, true)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "- ERROR: replaced" })
