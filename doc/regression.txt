@@ -56,6 +56,8 @@ Leave bisect.test unset for automatic comparison. See
 :NvimRegression
         Capture the current state, compare it with the baseline, and open the
         report in a scratch split. Press |q| to close the report.
+        For changed plugin revisions, the report shows local commit counts and
+        up to 10 commit subjects when available.
 
                                                           *:NvimHealth*
 :NvimHealth

@@ -1,6 +1,7 @@
 local M = {}
 
 local REPORT_NAME = "regression://report"
+local MAX_SUBJECTS = 10
 
 local function find_report_buf()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -39,6 +40,30 @@ function M.format(comparison)
     lines[#lines + 1] = string.format("%d environment change(s)", #comparison.changes)
     for _, item in ipairs(comparison.changes) do
       lines[#lines + 1] = "  - " .. item
+    end
+  end
+  local commits_header = false
+  for _, change in ipairs(comparison.plugin_changes or {}) do
+    if change.commits or change.commits_error then
+      if not commits_header then
+        lines[#lines + 1] = "Commits in changed plugins"
+        commits_header = true
+      end
+      if change.commits_error then
+        lines[#lines + 1] = string.format("  %s: commit list unavailable", change.name)
+      elseif #change.commits == 0 then
+        lines[#lines + 1] = string.format("  %s: revision moved back (no new commits)", change.name)
+      else
+        local commits = change.commits
+        lines[#lines + 1] = string.format("  %s: %d commit(s)", change.name, #commits)
+        for index = 1, math.min(#commits, MAX_SUBJECTS) do
+          local commit = commits[index]
+          lines[#lines + 1] = string.format("    %s %s", commit.revision:sub(1, 8), commit.subject)
+        end
+        if #commits > MAX_SUBJECTS then
+          lines[#lines + 1] = string.format("    ... and %d more", #commits - MAX_SUBJECTS)
+        end
+      end
     end
   end
   return table.concat(lines, "\n")

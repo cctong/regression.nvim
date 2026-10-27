@@ -74,7 +74,8 @@ The report opens in a scratch split (`q` to close) and includes:
 - new error messages;
 - missing or unhealthy LSP clients;
 - new `:checkhealth` errors and warnings;
-- added, removed, and changed plugin revisions;
+- added, removed, and changed plugin revisions, with commit counts and up to
+  10 commit subjects for changed revisions when available;
 - added, removed, and changed Neovim config files.
 
 - `:NvimHealth` — check the regression.nvim setup: Git, adapter availability, storage directory, and baseline validity. The same checks run through `:checkhealth regression`.
@@ -255,6 +256,8 @@ dependencies.
   after the relevant project buffers and clients have loaded.
 - Configuration file changes are reported, but bisection still only searches
   plugin revisions.
+- Commit lists use local Git history only. If listing commits fails, the
+  report shows "commit list unavailable".
 
 ## License
 

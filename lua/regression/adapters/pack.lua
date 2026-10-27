@@ -8,6 +8,7 @@ local M = {
   checkout = git.checkout,
   revisions_between = git.revisions_between,
   commit_subject = git.commit_subject,
+  commit_log = git.commit_log,
 }
 
 function M.available()

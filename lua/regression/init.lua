@@ -37,11 +37,38 @@ local function load_baseline()
   return baseline
 end
 
+local function attach_commits(current, result)
+  local adapter = require("regression.adapters").get(current.adapter)
+  if not adapter or type(adapter.commit_log) ~= "function" then return end
+  local util = require("regression.util")
+  for _, change in ipairs(result.plugin_changes or {}) do
+    local plugin = (current.plugins or {})[change.name] or { dir = change.dir }
+    if plugin.dir and change.old_revision and change.new_revision then
+      local ok, commits, err = pcall(
+        adapter.commit_log,
+        plugin,
+        change.old_revision,
+        change.new_revision
+      )
+      if ok and commits then
+        change.commits = commits
+        change.commits_error = nil
+      else
+        local message = ok and err or commits
+        message = util.trim(tostring(message or ""))
+        change.commits = nil
+        change.commits_error = message ~= "" and message or "commit list unavailable"
+      end
+    end
+  end
+end
+
 function M.regression()
   local baseline = load_baseline()
   if not baseline then return end
   local current = require("regression.collector").collect()
   local result = require("regression.compare").snapshots(baseline, current)
+  attach_commits(current, result)
   require("regression.report").show(result)
   local summary = result.has_regressions
     and string.format("%d regression(s) detected", #result.regressions)

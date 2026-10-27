@@ -110,4 +110,30 @@ function M.commit_subject(plugin, revision_id)
   end
 end
 
+function M.commit_log(plugin, old_revision, new_revision)
+  local ok, result = pcall(util.system, {
+    "git",
+    "log",
+    "--format=%H%x09%s",
+    old_revision .. ".." .. new_revision,
+  }, { cwd = plugin.dir })
+  if not ok then
+    local err = util.trim(tostring(result))
+    return nil, err ~= "" and err or "could not run git log"
+  end
+  if result.code ~= 0 then
+    local stderr = util.trim(result.stderr)
+    local err = stderr ~= "" and stderr or util.trim(result.stdout)
+    return nil, err ~= "" and err or "git log failed"
+  end
+  local commits = {}
+  for _, line in ipairs(util.lines(result.stdout)) do
+    local revision, subject = line:match("^(%x+)\t(.*)$")
+    if revision then
+      commits[#commits + 1] = { revision = revision, subject = util.trim(subject) }
+    end
+  end
+  return commits
+end
+
 return M

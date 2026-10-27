@@ -229,6 +229,54 @@ test("comparison ignores an adapter failure already present in the baseline", fu
   equal(false, result.has_regressions)
 end)
 
+test("report lists commits for changed plugins", function()
+  local report = require("regression.report")
+  local commits = {}
+  for index = 1, 12 do
+    commits[index] = {
+      revision = string.format("%08x", index) .. string.rep("a", 32),
+      subject = "subject " .. index,
+    }
+  end
+  local comparison = {
+    has_regressions = false,
+    regressions = {},
+    changes = {},
+    plugin_changes = {
+      { name = "unenriched" },
+      { name = "alpha", commits = commits },
+      { name = "beta", commits = {} },
+      { name = "gamma", commits_error = "private diagnostic" },
+    },
+  }
+  local saved = vim.deepcopy(comparison)
+  local expected = {
+    "regression.nvim",
+    "No regressions detected",
+    "Commits in changed plugins",
+    "  alpha: 12 commit(s)",
+  }
+  for index = 1, 10 do
+    expected[#expected + 1] = string.format("    %08x subject %d", index, index)
+  end
+  vim.list_extend(expected, {
+    "    ... and 2 more",
+    "  beta: revision moved back (no new commits)",
+    "  gamma: commit list unavailable",
+  })
+  equal(table.concat(expected, "\n"), report.format(comparison))
+  equal(saved, comparison)
+
+  -- Absent field, empty list, and an unenriched entry all omit the section.
+  comparison.plugin_changes = nil
+  local unchanged = "regression.nvim\nNo regressions detected"
+  equal(unchanged, report.format(comparison))
+  for _, changes in ipairs({ {}, { { name = "alpha" } } }) do
+    comparison.plugin_changes = changes
+    equal(unchanged, report.format(comparison))
+  end
+end)
+
 test("report opens a scratch buffer with the comparison", function()
   local comparison = {
     has_regressions = true,
@@ -374,6 +422,50 @@ test("commit search returns a single revision without probing", function()
   end)
   equal("only", first)
   equal(false, probed)
+end)
+
+test("git commit_log lists commits newest first", function()
+  local git = require("regression.git")
+  local util = require("regression.util")
+  local saved_system = util.system
+  local dir
+  local ok, failure = xpcall(function()
+    local shas
+    dir, shas = make_repo(4)
+    local plugin = { dir = dir }
+    equal({
+      { revision = shas[4], subject = "commit 4" },
+      { revision = shas[3], subject = "commit 3" },
+      { revision = shas[2], subject = "commit 2" },
+    }, assert(git.commit_log(plugin, shas[1], shas[4])))
+    equal({}, assert(git.commit_log(plugin, shas[4], shas[1])))
+    local commits, err = git.commit_log(plugin, string.rep("0", 40), shas[4])
+    equal(nil, commits)
+    truthy(type(err) == "string" and #err > 0)
+    for _, name in ipairs({ "lazy", "pack" }) do
+      truthy(require("regression.adapters." .. name).commit_log == git.commit_log)
+    end
+
+    -- Test the helper boundary directly: orchestration must not mask a throw.
+    for _, launch_error in ipairs({
+      "ENOENT: missing git executable",
+      "ENOENT: nonexistent cwd",
+    }) do
+      util.system = function() error(launch_error, 0) end
+      commits, err = git.commit_log(plugin, shas[1], shas[4])
+      equal(nil, commits)
+      truthy(type(err) == "string" and err:find(launch_error, 1, true))
+    end
+    util.system = function() return { code = 1, stdout = "", stderr = "" } end
+    commits, err = git.commit_log(plugin, shas[1], shas[4])
+    equal(nil, commits)
+    truthy(type(err) == "string" and #err > 0)
+    util.system = saved_system
+    equal(shas[4], git.revision(dir))
+  end, debug.traceback)
+  util.system = saved_system
+  if dir then vim.fn.delete(dir, "rf") end
+  if not ok then error(failure) end
 end)
 
 test("lazy adapter lists commits between two revisions", function()
@@ -819,7 +911,197 @@ local function install_fake_adapter()
     checkout = git.checkout,
     revisions_between = git.revisions_between,
     commit_subject = git.commit_subject,
+    commit_log = git.commit_log,
   }
+end
+
+local function with_commit_report(fn)
+  local config = require("regression.config")
+  local util = require("regression.util")
+  local saved_options = config.options
+  local saved_collector = package.loaded["regression.collector"]
+  local saved_fake = package.loaded["regression.adapters.fake"]
+  local saved_notify = vim.notify
+  local saved_system = util.system
+  local saved_tab = vim.api.nvim_get_current_tabpage()
+  local saved_win = vim.api.nvim_get_current_win()
+  local before = {}
+  local held = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do before[buf] = true end
+  local directory = vim.fn.tempname()
+  local repo, test_tab
+  local ok, failure = xpcall(function()
+    for buf in pairs(before) do
+      -- Renaming a buffer can wipe another entry in this snapshot.
+      if vim.api.nvim_buf_is_valid(buf) then
+        local name = vim.api.nvim_buf_get_name(buf)
+        if name:match("regression://report$") then
+          held[#held + 1] = { buf = buf, name = name }
+          vim.api.nvim_buf_set_name(buf, "regression-test-held://" .. buf)
+        end
+      end
+    end
+    vim.cmd("noautocmd tabnew")
+    test_tab = vim.api.nvim_get_current_tabpage()
+    local shas
+    repo, shas = make_repo(3)
+    install_fake_adapter()
+    require("regression").setup({
+      storage_dir = directory,
+      profile = "commit-report",
+      adapter = "baseline-only",
+      startup = { enabled = false },
+      health = { enabled = false },
+    })
+    vim.notify = function() end
+    fn({ directory = directory, repo = repo, shas = shas })
+  end, debug.traceback)
+
+  -- Restore global/module state first, regardless of UI cleanup success.
+  config.options = saved_options
+  package.loaded["regression.collector"] = saved_collector
+  package.loaded["regression.adapters.fake"] = saved_fake
+  vim.notify = saved_notify
+  util.system = saved_system
+  local cleanup_errors = {}
+  local function cleanup(action)
+    local restored, err = pcall(action)
+    if not restored then cleanup_errors[#cleanup_errors + 1] = tostring(err) end
+  end
+  cleanup(function()
+    if test_tab and vim.api.nvim_tabpage_is_valid(test_tab) then
+      vim.api.nvim_set_current_tabpage(test_tab)
+      vim.cmd("noautocmd tabclose!")
+    end
+  end)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if not before[buf] and vim.api.nvim_buf_is_valid(buf) then
+      cleanup(function() vim.api.nvim_buf_delete(buf, { force = true }) end)
+    end
+  end
+  for _, item in ipairs(held) do
+    cleanup(function() vim.api.nvim_buf_set_name(item.buf, item.name) end)
+  end
+  cleanup(function()
+    vim.api.nvim_set_current_tabpage(saved_tab)
+    vim.api.nvim_set_current_win(saved_win)
+  end)
+  if repo then vim.fn.delete(repo, "rf") end
+  vim.fn.delete(directory, "rf")
+  if #cleanup_errors > 0 then
+    error((not ok and (failure .. "\n") or "") .. table.concat(cleanup_errors, "\n"))
+  end
+  if not ok then error(failure) end
+end
+
+for _, case in ipairs({
+  { mode = "success", name = "regression report includes commits since the baseline" },
+  { mode = "nil", name = "regression report continues after a commit_log failure" },
+  { mode = "system", name = "regression report continues after a git launch failure" },
+  { mode = "throw", name = "regression report continues after an adapter exception" },
+  { mode = "no_method", name = "regression report skips an adapter without commit_log" },
+  { mode = "unavailable", name = "regression report skips an unavailable adapter" },
+}) do
+  test(case.name, function()
+    with_commit_report(function(ctx)
+      local git = require("regression.git")
+      local util = require("regression.util")
+      local shas = ctx.shas
+      local baseline = valid_snapshot({
+        adapter = "baseline-only",
+        plugins = {
+          alpha = { revision = shas[1], dir = ctx.directory .. "/old-alpha", url = "old-alpha" },
+          beta = { revision = shas[1], dir = ctx.directory .. "/old-beta", url = "old-beta" },
+        },
+      })
+      local current = valid_snapshot({
+        adapter = "fake",
+        plugins = {
+          alpha = { revision = shas[3], dir = ctx.repo, url = "current-alpha" },
+          beta = { revision = shas[3], dir = ctx.repo, url = "current-beta" },
+        },
+      })
+      if case.mode == "system" then
+        current.plugins.alpha.dir = ctx.directory .. "/missing-alpha"
+      end
+      assert(require("regression.store").save(baseline))
+      package.loaded["regression.collector"] = { collect = function() return current end }
+      local adapter = package.loaded["regression.adapters.fake"]
+      local calls = {}
+      adapter.commit_log = function(plugin, old_revision, new_revision)
+        calls[#calls + 1] = { plugin = plugin, old = old_revision, new = new_revision }
+        if plugin == current.plugins.alpha then
+          if case.mode == "nil" then return nil, "history unavailable" end
+          if case.mode == "throw" then error("adapter exploded", 0) end
+        end
+        return git.commit_log(plugin, old_revision, new_revision)
+      end
+      local launch_attempts = 0
+      if case.mode == "system" then
+        local real_system = util.system
+        util.system = function(argv, opts)
+          if opts and opts.cwd == current.plugins.alpha.dir then
+            launch_attempts = launch_attempts + 1
+            error("ENOENT: nonexistent cwd", 0)
+          end
+          return real_system(argv, opts)
+        end
+      elseif case.mode == "no_method" then
+        adapter.commit_log = nil
+      elseif case.mode == "unavailable" then
+        adapter.available = function() return false end
+      end
+
+      local result = assert(require("regression").regression())
+      equal(false, result.has_regressions)
+      equal(2, #result.plugin_changes)
+      local alpha, beta = result.plugin_changes[1], result.plugin_changes[2]
+      equal("alpha", alpha.name)
+      equal("beta", beta.name)
+      truthy(vim.api.nvim_buf_get_name(0):match("regression://report$"))
+      local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+      if case.mode == "no_method" or case.mode == "unavailable" then
+        equal(0, #calls)
+        for _, change in ipairs(result.plugin_changes) do
+          equal(nil, change.commits)
+          equal(nil, change.commits_error)
+        end
+        equal(nil, text:find("Commits in changed plugins", 1, true))
+      else
+        equal(2, #calls)
+        for index, name in ipairs({ "alpha", "beta" }) do
+          truthy(calls[index].plugin == current.plugins[name], "expected current plugin identity")
+          equal(current.plugins[name].dir, calls[index].plugin.dir)
+          equal(shas[1], calls[index].old)
+          equal(shas[3], calls[index].new)
+        end
+        local expected = {
+          { revision = shas[3], subject = "commit 3" },
+          { revision = shas[2], subject = "commit 2" },
+        }
+        equal(expected, beta.commits)
+        equal(nil, beta.commits_error)
+        truthy(text:find("  beta: 2 commit(s)", 1, true))
+        truthy(text:find(shas[3]:sub(1, 8) .. " commit 3", 1, true))
+        if case.mode == "success" then
+          equal(expected, alpha.commits)
+          equal(nil, alpha.commits_error)
+          truthy(text:find("  alpha: 2 commit(s)", 1, true))
+        else
+          equal(nil, alpha.commits)
+          truthy(type(alpha.commits_error) == "string" and #alpha.commits_error > 0)
+          local diagnostic = ({
+            ["nil"] = "history unavailable",
+            system = "ENOENT: nonexistent cwd",
+            throw = "adapter exploded",
+          })[case.mode]
+          truthy(alpha.commits_error:find(diagnostic, 1, true))
+          truthy(text:find("  alpha: commit list unavailable", 1, true))
+        end
+      end
+      equal(case.mode == "system" and 1 or 0, launch_attempts)
+    end)
+  end)
 end
 
 local function repo_with_states(dir, states)
